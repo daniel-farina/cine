@@ -1,0 +1,54 @@
+# Secrets & local env
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Build artifacts
+frontend/dist/
+frontend/tsconfig.tsbuildinfo
+backend/target/
+
+# Generated media & runtime data (videos, images, DB, manifests)
+output/
+!output/.gitkeep
+
+# Media / binary formats
+*.mp4
+*.mov
+*.webm
+*.mkv
+*.avi
+*.m4v
+
+# Keys & certs
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+*.credentials
+secrets.json
+**/secrets/
+
+# OS & editors
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.log
+npm-debug.log*
+
+# Planner / API debug dumps
+.plan-request.json
+**/.plan-request.json
+
+# PM2
+.pm2/

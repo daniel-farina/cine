@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cine AI</title>
+    <script>
+      (function () {
+        var t = localStorage.getItem("cine-theme");
+        document.documentElement.dataset.theme =
+          t === "light" || t === "dark" ? t : "dark";
+        document.documentElement.style.colorScheme =
+          document.documentElement.dataset.theme;
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
