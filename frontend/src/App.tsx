@@ -42,6 +42,8 @@ import YoloOpeningPicker from "./YoloOpeningPicker";
 import type { VideoSource } from "./types";
 import SceneInspector from "./SceneInspector";
 import SettingsPage from "./SettingsPage";
+import QuickBuilderPage from "./QuickBuilderPage";
+import { loadLastScreen, saveLastScreen } from "./quickBuilderStorage";
 import { effectiveSettings, normalizeProject } from "./effectiveSettings";
 import {
   coerceNarrativeModePreference,
@@ -56,13 +58,13 @@ import ThemeToggle from "./ThemeToggle";
 import { CreateAllCancelled, runCreateAllPipeline } from "./createAllPipeline";
 import {
   initCreateAll,
+  initPlanProgress,
   mergeCreateAllProgress,
   type CreateAllProgress,
 } from "./createAllTypes";
 import { PixelProgress } from "./PixelProgress";
 import {
   clearPlanningScenes,
-  formatPlanStreamError,
   planError,
   planLog,
   planWarn,
@@ -87,7 +89,7 @@ export default function App() {
   const [project, setProject] = useState<Project | null>(null);
   const [projectList, setProjectList] = useState<ProjectMeta[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
-  const [screen, setScreen] = useState<"home" | "project" | "settings">("home");
+  const [screen, setScreen] = useState<"home" | "project" | "settings" | "quick">("home");
   const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
   const [ready, setReady] = useState(false);
   const [status, setStatus] = useState("");
@@ -107,6 +109,7 @@ export default function App() {
   const assetsRef = useRef<Asset[]>([]);
   const createAllAbortRef = useRef(false);
   const batchRef = useRef<CreateAllProgress | null>(null);
+  const restoredScreenRef = useRef(false);
 
   useEffect(() => {
     projectRef.current = project;
@@ -177,6 +180,10 @@ export default function App() {
       .finally(() => setReady(true));
   }, [load]);
 
+  useEffect(() => {
+    saveLastScreen(screen);
+  }, [screen]);
+
   const openProject = useCallback(
     (p: Project) => {
       const normalized = normalizeProject(p, appSettings);
@@ -200,7 +207,30 @@ export default function App() {
     [openProject]
   );
 
+  useEffect(() => {
+    if (!ready || !config || restoredScreenRef.current) return;
+    restoredScreenRef.current = true;
+    const last = loadLastScreen();
+    if (last === "quick") {
+      setScreen("quick");
+      return;
+    }
+    if (last === "settings") {
+      setScreen("settings");
+      return;
+    }
+    if (last === "project" && activeProjectId) {
+      void fetchProject(activeProjectId)
+        .then((p) => openProject(p))
+        .catch(() => setScreen("home"));
+    }
+  }, [ready, config, activeProjectId, openProject]);
+
   const serverJob = jobQueue.jobForProject(project?.id ?? null);
+  const planJobActive =
+    serverJob?.kind === "plan" &&
+    ["queued", "running", "waiting_input"].includes(serverJob.status);
+  const plannerBusy = busy || planJobActive;
 
   useEffect(() => {
     const j = serverJob;
@@ -242,12 +272,14 @@ export default function App() {
     if (j.status === "error") {
       setStatus(j.error || j.label || "Job failed");
       setBatch((prev) => (prev ? { ...prev, active: false, phase: "idle" } : null));
+      if (j.kind === "plan") void recoverFromPlanFailure();
     }
     if (j.status === "cancelled") {
       setBatch((prev) => (prev ? { ...prev, active: false, phase: "idle" } : null));
     }
   }, [
     serverJob?.id,
+    serverJob?.kind,
     serverJob?.status,
     serverJob?.updatedAt,
     serverJob?.progress,
@@ -714,7 +746,7 @@ export default function App() {
     apply?: TimelineApplyMode;
   }) => {
     const planBrief = planBriefForApi();
-    if (!project || !planBrief) {
+    if (!project || !planBrief || !effective) {
       setStatus("Enter a film brief first.");
       return;
     }
@@ -723,100 +755,53 @@ export default function App() {
 
     if (apply === "replace" && hasExistingScenes && !overrides) {
       const ok = confirm(
-        `Replace all ${clipCount} timeline scenes with ${count} new AI-planned scenes?`
+        `Replace all ${clipCount} timeline scenes with ${count} new AI-planned scenes? Work runs in the background — you can leave this page.`
       );
       if (!ok) return;
     }
 
     const keptExisting =
       apply === "append" ? scenesToKeepForAppend(project.scenes) : [];
-    const baseIndex = apply === "append" ? keptExisting.length : 0;
     const continuation =
       apply === "append" && keptExisting.length > 0
         ? buildPlanContinuation(project)
         : undefined;
 
-    setBusy(true);
-    setReasoningLog("");
-    setStatus(
+    const label =
       apply === "append" && hasExistingScenes
-        ? `Planning ${count} more scenes after scene ${baseIndex}…`
-        : `Planning ${count} scenes…`
-    );
-
-    const applyPlan = async (plan: ScenePlan) => {
-      const droppedStubs =
-        apply === "append"
-          ? project.scenes.length -
-            scenesToKeepForAppend(project.scenes).length
-          : 0;
-      const next = projectWithPlan(project, plan, apply, planBrief);
-      await persist(next);
-      let msg =
-        apply === "append"
-          ? `Added ${plan.shots.length} scenes (${next.scenes.length} total).`
-          : `Created ${plan.shots.length} scenes.`;
-      if (droppedStubs > 0) {
-        msg += ` Removed ${droppedStubs} empty placeholder scene${droppedStubs > 1 ? "s" : ""}.`;
-      }
-      setStatus(msg);
-    };
+        ? `Plan +${count} · ${project.title}`
+        : `Plan ${count} · ${project.title}`;
 
     try {
-      let applied = false;
-      planLog("runPlan_start", { count, apply });
-      const plan = await planScenesStream(
-        {
+      planLog("runPlan_enqueue", { count, apply });
+      const job = await jobQueue.enqueue({
+        projectId: project.id,
+        kind: "plan",
+        label,
+        payload: {
           brief: planBrief,
           shotCount: count,
+          apply,
+          plannerMode: effective.plannerMode,
+          narrativeMode: effective.narrativeMode,
           aspectRatio: ks?.aspectRatio,
-          mode: effective?.plannerMode,
-          narrativeMode: effective?.narrativeMode,
-          narrativeModes: effective?.narrativeModes,
           clipDurationSeconds: ks?.videoDuration ?? config?.defaults.videoDuration,
-          systemRules: effective?.systemRules,
+          systemRules: effective.systemRules,
           continuation,
         },
-        {
-          onReasoning: (d) => setReasoningLog((prev) => prev + d),
-          onPhase: (m) => setStatus(m),
-          onShot: ({ index, label }) => {
-            const globalIndex = baseIndex + index;
-            setStatus(`Drafting scene ${globalIndex + 1}: ${label}`);
-            setProject((prev) => {
-              if (!prev) return prev;
-              const scenes = [...prev.scenes];
-              while (scenes.length <= globalIndex) {
-                const n = scenes.length + 1;
-                scenes.push({ ...newScene(n), title: `Scene ${n}`, status: "generating" });
-              }
-              scenes[globalIndex] = {
-                ...scenes[globalIndex],
-                title: label,
-                status: "generating",
-              };
-              return { ...prev, scenes };
-            });
-          },
-          onPlan: (p) => {
-            if (!applied) {
-              applied = true;
-              void applyPlan(p);
-            }
-          },
-          onError: (m) => {
-            throw new Error(m);
-          },
-        }
+      });
+      setBatch(
+        (job.progressDetail as CreateAllProgress | undefined) ??
+          initPlanProgress(job.label || "Planning scenes…")
       );
-      if (plan && !applied) await applyPlan(plan);
+      setStatus(
+        "Plan queued — progress in the job bar; safe to refresh or switch projects."
+      );
     } catch (e) {
-      planError("runPlan_failed", { error: String(e instanceof Error ? e.message : e) });
-      await recoverFromPlanFailure();
-      setStatus(formatPlanStreamError(e));
-    } finally {
-      setBusy(false);
-      setReasoningLog("");
+      planError("runPlan_enqueue_failed", {
+        error: String(e instanceof Error ? e.message : e),
+      });
+      setStatus(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -831,6 +816,29 @@ export default function App() {
     return (
       <div className="app" style={{ padding: 24 }}>
         Loading Cine AI…
+        {queueBar}
+      </div>
+    );
+  }
+
+  if (screen === "quick") {
+    return (
+      <div className="app home-shell has-job-queue">
+        <header className="topbar topbar-global">
+          <AppBrand onClick={() => setScreen("home")} />
+          <div className="spacer" />
+          <button type="button" className="btn" onClick={() => setScreen("settings")}>
+            Settings
+          </button>
+          <ThemeToggle />
+        </header>
+        <QuickBuilderPage
+          config={config}
+          appSettings={appSettings}
+          hasApiKey={config.hasApiKey}
+          onBack={() => setScreen("home")}
+          onAssetsChange={() => void reloadAssets()}
+        />
         {queueBar}
       </div>
     );
@@ -881,6 +889,9 @@ export default function App() {
         <header className="topbar topbar-global">
           <AppBrand />
           <div className="spacer" />
+          <button type="button" className="btn" onClick={() => setScreen("quick")}>
+            Quick Builder
+          </button>
           <ThemeToggle />
         </header>
         <HomePage
@@ -890,6 +901,7 @@ export default function App() {
           onIndexChange={() => void reloadProjects()}
           onOpenProject={openProject}
           onOpenSettings={() => setScreen("settings")}
+          onOpenQuickBuilder={() => setScreen("quick")}
         />
         {queueBar}
       </div>
@@ -1022,7 +1034,7 @@ export default function App() {
                       narrativeMode: e.target.value,
                     });
                   }}
-                  disabled={busy}
+                  disabled={plannerBusy}
                   title="How the planner treats speech and dialogue"
                 >
                   {narrativeModesForSelect(effective?.narrativeModes ?? []).map((m) => (
@@ -1035,10 +1047,10 @@ export default function App() {
               <button
                 type="button"
                 className="btn btn-primary"
-                disabled={busy || !config.hasApiKey || !brief.trim()}
+                disabled={plannerBusy || !config.hasApiKey || !brief.trim()}
                 onClick={() => void runPlan()}
               >
-                {busy
+                {planJobActive
                   ? "Planning…"
                   : planApplyMode === "append" && hasExistingScenes
                     ? `Add ${sceneCount} scenes`
@@ -1053,7 +1065,7 @@ export default function App() {
                     key={n}
                     type="button"
                     className="btn btn-ghost btn-xs"
-                    disabled={busy || !config.hasApiKey || !brief.trim()}
+                    disabled={plannerBusy || !config.hasApiKey || !brief.trim()}
                     onClick={() => void runPlan({ count: n, apply: "append" })}
                     title={`Append ${n} scene(s) after scene ${clipCount}`}
                   >
@@ -1065,12 +1077,12 @@ export default function App() {
             <div className="planner-yolo-opening">
               <YoloOpeningPicker
                 selected={yoloOpeningMode}
-                disabled={busy}
+                disabled={plannerBusy}
                 onChange={onYoloOpeningChange}
               />
             </div>
             <div className="planner-yolo-row">
-              {batch?.active ? (
+              {batch?.active || planJobActive ? (
                 <button
                   type="button"
                   className="btn btn-ghost btn-stop-yolo"
@@ -1083,7 +1095,7 @@ export default function App() {
                   <button
                     type="button"
                     className="btn btn-yolo"
-                    disabled={busy || !config.hasApiKey || !brief.trim()}
+                    disabled={plannerBusy || !config.hasApiKey || !brief.trim()}
                     onClick={() => void runYolo()}
                     title="Plan (if needed), then keyframe → video → bridge for every scene"
                   >
@@ -1093,7 +1105,7 @@ export default function App() {
                     type="button"
                     className="btn btn-ghost"
                     disabled={
-                      busy || !config.hasApiKey || !hasExistingScenes || !brief.trim()
+                      plannerBusy || !config.hasApiKey || !hasExistingScenes || !brief.trim()
                     }
                     onClick={() => void runCreateAll()}
                     title="Generate media for scenes already on the timeline"
@@ -1114,8 +1126,8 @@ export default function App() {
                       : "Opening still ready for YOLO."}
                 </p>
                 <ImageUploadZone
-                  disabled={busy}
-                  busy={busy}
+                  disabled={plannerBusy}
+                  busy={plannerBusy}
                   hasKeyframe={!scene1UploadWarn}
                   highlight
                   onFile={handlePlannerOpeningUpload}

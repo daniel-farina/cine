@@ -38,6 +38,14 @@ export type Scene = {
   error?: string;
 };
 
+export type VideoApiPayloadStored = {
+  recordedAt: string;
+  client: Record<string, unknown>;
+  xai: Record<string, unknown>;
+  xaiStart?: Record<string, unknown>;
+  note?: string;
+};
+
 export type Asset = {
   id: string;
   type: "image" | "video" | "frame" | "film";
@@ -51,6 +59,10 @@ export type Asset = {
   sourceImageId?: string;
   source?: string;
   model?: string;
+  duration?: number;
+  aspect_ratio?: string;
+  resolution?: string;
+  apiPayload?: VideoApiPayloadStored;
   createdAt: string;
 };
 

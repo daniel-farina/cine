@@ -1,10 +1,17 @@
 /**
- * Server-side job runner — executes create_all / yolo generate using the same pipeline as the UI.
+ * Server-side job runner — executes create_all / yolo / plan using the same pipeline as the UI.
  * Usage: npx tsx media-server/runPipeline.ts <jobId>
  */
 import { config } from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
+import type { ScenePlan } from "../frontend/src/api.ts";
+import {
+  attachOpeningUploadToScene1,
+  projectWithPlan,
+  readOpeningUpload,
+  type TimelineApplyMode,
+} from "../frontend/src/applyScenePlan.ts";
 import type { AppSettings, Asset, Config, Project } from "../frontend/src/types.ts";
 import type { CreateAllProgress } from "../frontend/src/createAllTypes.ts";
 
@@ -31,7 +38,7 @@ patchFetchForServer();
 const { runCreateAllPipeline, CreateAllCancelled } = await import(
   "../frontend/src/createAllPipeline.ts"
 );
-const { initCreateAll, mergeCreateAllProgress } = await import(
+const { initCreateAll, initPlanProgress, mergeCreateAllProgress } = await import(
   "../frontend/src/createAllTypes.ts"
 );
 const { effectiveSettings } = await import("../frontend/src/effectiveSettings.ts");
@@ -54,11 +61,14 @@ async function api<T>(urlPath: string, init?: RequestInit): Promise<T> {
   return data as T;
 }
 
-async function patchJob(jobId: string, patch: {
-  progress?: number;
-  label?: string;
-  progressDetail?: CreateAllProgress;
-}) {
+async function patchJob(
+  jobId: string,
+  patch: {
+    progress?: number;
+    label?: string;
+    progressDetail?: CreateAllProgress;
+  }
+) {
   await api(`/api/jobs/${jobId}/progress`, {
     method: "POST",
     body: JSON.stringify({
@@ -86,54 +96,59 @@ async function isCancelled(jobId: string): Promise<boolean> {
   return job.status === "cancelled";
 }
 
-async function runPlan(projectId: string, payload: Record<string, unknown>) {
-  const plan = await api<{ lookBible: string; storySpine?: string; shots: unknown[] }>(
-    "/api/plan/scenes",
-    {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }
-  );
-  const project = await api<Project>(`/api/projects/${projectId}`);
-  const shots = plan.shots as Array<{
-    label: string;
-    shotKind?: string;
-    scenePrompt: string;
-    cameraPrompt: string;
-    actionPrompt?: string;
-    dialogue?: string;
-    visualBeat?: string;
-    videoPrompt?: string;
-    storyBeat?: string;
-    continuityIn?: string;
-    endState?: string;
-  }>;
-  const scenes = shots.map((s, i) => ({
-    id: crypto.randomUUID(),
-    title: s.label || `Scene ${i + 1}`,
-    imagePrompt: s.scenePrompt || "",
-    visualBeat: s.visualBeat || s.scenePrompt || "",
-    videoPrompt: s.videoPrompt || s.actionPrompt || "",
-    dialogue: s.dialogue || "",
-    motionPrompt: s.cameraPrompt || "Slow subtle dolly in",
-    shotKind: s.shotKind,
-    storyBeat: s.storyBeat,
-    continuityIn: s.continuityIn,
-    endState: s.endState,
-    status: "empty" as const,
-  }));
-  const firstId = scenes[0]?.id ?? null;
-  const updated: Project = {
-    ...project,
-    lookBible: plan.lookBible,
-    storySpine: plan.storySpine,
-    scenes,
-    selectedSceneId: firstId,
-  };
-  await api<{ project: Project }>(`/api/projects/${project.id}`, {
-    method: "PUT",
-    body: JSON.stringify(updated),
+function planProgress(label: string, overall: number): CreateAllProgress {
+  return { ...initPlanProgress(label), overall };
+}
+
+async function runPlanForProject(
+  jobId: string,
+  projectId: string,
+  payload: Record<string, unknown>,
+  studio: AppSettings,
+  config: Config
+): Promise<Project> {
+  let project = await api<Project>(`/api/projects/${projectId}`);
+  const apply = (payload.apply === "append" ? "append" : "replace") as TimelineApplyMode;
+  const brief = String(payload.brief || "").trim();
+  if (!brief) throw new Error("Film brief is required for planning.");
+
+  const savedOpening = apply === "replace" ? readOpeningUpload(project.scenes) : null;
+
+  let progress = planProgress("Planning scenes…", 0.05);
+  await patchJob(jobId, { label: progress.label, progress: progress.overall, progressDetail: progress });
+
+  const plan = await api<ScenePlan>("/api/plan/scenes", {
+    method: "POST",
+    body: JSON.stringify({
+      brief,
+      mode: payload.plannerMode || studio.plannerMode,
+      shotCount: Number(payload.shotCount) || studio.defaultSceneCount,
+      aspectRatio:
+        payload.aspectRatio || project.keyframeSettings?.aspectRatio || "16:9",
+      systemRules: payload.systemRules ?? studio.systemRules,
+      narrativeMode: payload.narrativeMode || studio.narrativeMode,
+      narrativeModes: studio.narrativeModes,
+      clipDurationSeconds:
+        payload.clipDurationSeconds ??
+        project.keyframeSettings?.videoDuration ??
+        config.defaults.videoDuration,
+      continuation: payload.continuation,
+    }),
   });
+
+  progress = planProgress("Applying scene plan…", 0.92);
+  await patchJob(jobId, { label: progress.label, progress: progress.overall, progressDetail: progress });
+
+  let updated = projectWithPlan(project, plan, apply, brief);
+  if (savedOpening) {
+    updated = attachOpeningUploadToScene1(updated, savedOpening);
+  }
+
+  const { project: saved } = await api<{ project: Project }>(
+    `/api/projects/${updated.id}`,
+    { method: "PUT", body: JSON.stringify(updated) }
+  );
+  return saved;
 }
 
 async function main() {
@@ -160,22 +175,36 @@ async function main() {
   let progress: CreateAllProgress | null = null;
 
   try {
-    if (job.kind === "yolo" || job.kind === "plan") {
+    if (job.kind === "plan") {
+      const saved = await runPlanForProject(jobId, job.projectId, job.payload, studio, config);
+      const shotCount = saved.scenes.length;
+      progress = {
+        active: false,
+        phase: "idle",
+        sceneIndex: 0,
+        currentStep: null,
+        label: `Planned ${shotCount} scene${shotCount === 1 ? "" : "s"}.`,
+        overall: 1,
+        byScene: {},
+      };
+      await finishJob(jobId, "done", undefined, progress);
+      console.error(`[job] ${jobId} plan done (${shotCount} scenes)`);
+      return;
+    }
+
+    if (job.kind === "yolo") {
       const needsPlan = Boolean(job.payload.needsPlan);
       if (needsPlan && job.payload.brief) {
-        await patchJob(jobId, { label: "Planning scenes…", progress: 0.02 });
-        await runPlan(job.projectId, {
-          brief: job.payload.brief,
-          mode: job.payload.plannerMode || studio.plannerMode,
-          shotCount: job.payload.sceneCount || studio.defaultSceneCount,
-          aspectRatio: project.keyframeSettings?.aspectRatio || "16:9",
-          systemRules: studio.systemRules,
-          narrativeMode: job.payload.narrativeMode || studio.narrativeMode,
-          narrativeModes: studio.narrativeModes,
-          clipDurationSeconds:
-            project.keyframeSettings?.videoDuration ?? config.defaults.videoDuration,
-        });
-        project = await api<Project>(`/api/projects/${job.projectId}`);
+        project = await runPlanForProject(
+          jobId,
+          job.projectId,
+          {
+            ...job.payload,
+            apply: "replace",
+          },
+          studio,
+          config
+        );
       }
     }
 
@@ -195,7 +224,11 @@ async function main() {
 
     const sceneIds = project.scenes.map((s) => s.id);
     progress = initCreateAll(sceneIds, project.scenes.length);
-    await patchJob(jobId, { label: "Generating keyframes, videos, bridges…", progress: 0, progressDetail: progress });
+    await patchJob(jobId, {
+      label: "Generating keyframes, videos, bridges…",
+      progress: 0,
+      progressDetail: progress,
+    });
 
     let projectRef = project;
     let assetsRef = assets;

@@ -16,13 +16,24 @@ backend/target/
 output/
 !output/.gitkeep
 
-# Media / binary formats
+# Media / binary formats (anywhere in repo)
 *.mp4
 *.mov
 *.webm
 *.mkv
 *.avi
 *.m4v
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+!frontend/public/**
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
 
 # Keys & certs
 *.pem

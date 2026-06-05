@@ -14,7 +14,7 @@ function loadEnv(file) {
   return env;
 }
 
-const root = "/Users/dan/cine";
+const root = path.resolve(__dirname);
 const sharedEnv = { CINE_ROOT: root, ...loadEnv(path.join(root, ".env")) };
 
 module.exports = {

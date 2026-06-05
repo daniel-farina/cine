@@ -470,6 +470,33 @@ async function editImageAsset({
   });
 }
 
+function summarizeImageFieldForLog(image) {
+  if (!image || typeof image !== "object") return image;
+  const url = image.url;
+  if (typeof url !== "string") return image;
+  if (url.startsWith("data:")) {
+    const comma = url.indexOf(",");
+    const header = comma > 0 ? url.slice(0, comma + 1) : "data:…,";
+    const b64Len = comma > 0 ? url.length - comma - 1 : url.length;
+    return {
+      ...image,
+      url: `${header}[base64 ${b64Len} chars — omitted from stored log]`,
+    };
+  }
+  return image;
+}
+
+function summarizePayloadForLog(value) {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(summarizePayloadForLog);
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (k === "image") out[k] = summarizeImageFieldForLog(v);
+    else out[k] = summarizePayloadForLog(v);
+  }
+  return out;
+}
+
 async function pollVideoDone(requestId) {
   for (let i = 0; i < 120; i++) {
     const data = await apiGet(`/videos/${requestId}`);
@@ -482,7 +509,15 @@ async function pollVideoDone(requestId) {
   throw new Error("Video timed out");
 }
 
-async function generateVideoAsset({ prompt, sourceImageId, duration = 10, aspect_ratio = "16:9", resolution = "720p", sceneId }) {
+async function generateVideoAsset({
+  prompt,
+  sourceImageId,
+  duration = 10,
+  aspect_ratio = "16:9",
+  resolution = "720p",
+  sceneId,
+  clientRequest,
+}) {
   if (!sourceImageId) {
     throw new Error(
       "grok-imagine-video-1.5-preview requires a keyframe (image-to-video). Generate or upload a still first."
@@ -490,6 +525,16 @@ async function generateVideoAsset({ prompt, sourceImageId, duration = 10, aspect
   }
   const img = await getAsset(sourceImageId);
   if (!img) throw new Error("Keyframe image not found");
+
+  const client = {
+    prompt,
+    sourceImageId,
+    duration,
+    aspect_ratio,
+    resolution: normalizeVideoResolution(resolution),
+    sceneId: sceneId ?? null,
+    ...(clientRequest && typeof clientRequest === "object" ? clientRequest : {}),
+  };
 
   const body = {
     model: VIDEO_MODEL,
@@ -500,6 +545,7 @@ async function generateVideoAsset({ prompt, sourceImageId, duration = 10, aspect
     image: await videoImageInputFromAsset(img),
   };
 
+  const xaiPayload = summarizePayloadForLog(body);
   const start = await apiPost("/videos/generations", body);
 
   const data = await pollVideoDone(start.request_id);
@@ -520,10 +566,16 @@ async function generateVideoAsset({ prompt, sourceImageId, duration = 10, aspect
     model: VIDEO_MODEL,
     duration,
     aspect_ratio,
-    resolution,
+    resolution: normalizeVideoResolution(resolution),
     sourceImageId,
     sceneId,
     createdAt: new Date().toISOString(),
+    apiPayload: {
+      recordedAt: new Date().toISOString(),
+      client,
+      xai: xaiPayload,
+      xaiStart: summarizePayloadForLog(start),
+    },
   });
 }
 
@@ -900,6 +952,7 @@ app.post("/api/videos/generate", async (req, res) => {
       aspect_ratio,
       resolution: normalizeVideoResolution(resolution),
       sceneId,
+      clientRequest: req.body,
     });
     res.json(asset);
   } catch (e) {

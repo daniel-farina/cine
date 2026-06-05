@@ -10,6 +10,7 @@ type Props = {
   onIndexChange: () => void;
   onOpenProject: (project: Project) => void;
   onOpenSettings: () => void;
+  onOpenQuickBuilder: () => void;
 };
 
 function formatUpdated(iso: string): string {
@@ -31,6 +32,7 @@ export default function HomePage({
   onIndexChange,
   onOpenProject,
   onOpenSettings,
+  onOpenQuickBuilder,
 }: Props) {
   const [newTitle, setNewTitle] = useState("");
   const [template, setTemplate] = useState<"blank" | "lighthouse">("blank");
@@ -84,6 +86,9 @@ export default function HomePage({
           <p className="home-tagline">Your films — pick a project or start a new one.</p>
         </div>
         <div className="home-header-actions">
+          <button type="button" className="btn btn-primary" onClick={onOpenQuickBuilder}>
+            Quick Builder
+          </button>
           <button type="button" className="btn" onClick={onOpenSettings}>
             Settings
           </button>
@@ -94,6 +99,21 @@ export default function HomePage({
       </header>
 
       <div className="home-grid">
+        <button
+          type="button"
+          className="home-card home-card-quick"
+          disabled={busy}
+          onClick={onOpenQuickBuilder}
+        >
+          <span className="home-card-quick-icon" aria-hidden>
+            ⚡
+          </span>
+          <span className="home-card-quick-label">Quick Builder</span>
+          <span className="home-card-quick-sub hint">
+            Text or image → video · stitch clips
+          </span>
+        </button>
+
         <button
           type="button"
           className="home-card home-card-new"

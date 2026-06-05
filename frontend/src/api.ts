@@ -160,35 +160,47 @@ export const uploadKeyframeImage = async (
   });
 };
 
-export const generateImage = (body: {
-  prompt: string;
-  sceneId: string;
-  label?: string;
-  aspect_ratio?: string;
-  resolution?: string;
-  model?: string;
-}) =>
+export const generateImage = (
+  body: {
+    prompt: string;
+    sceneId: string;
+    label?: string;
+    aspect_ratio?: string;
+    resolution?: string;
+    model?: string;
+  },
+  opts?: { signal?: AbortSignal }
+) =>
   json<Asset>("/api/images/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal: opts?.signal,
   });
 
 const VIDEO_GENERATE_TIMEOUT_MS = 29 * 60 * 1000;
 
-export async function generateVideo(body: {
-  prompt: string;
-  sourceImageId: string;
-  sceneId: string;
-  duration?: number;
-  aspect_ratio?: string;
-  resolution?: string;
-}) {
+export async function generateVideo(
+  body: {
+    prompt: string;
+    sourceImageId: string;
+    sceneId: string;
+    duration?: number;
+    aspect_ratio?: string;
+    resolution?: string;
+  },
+  opts?: { signal?: AbortSignal }
+) {
+  const timeout = AbortSignal.timeout(VIDEO_GENERATE_TIMEOUT_MS);
+  const signal =
+    opts?.signal && typeof AbortSignal.any === "function"
+      ? AbortSignal.any([timeout, opts.signal])
+      : opts?.signal ?? timeout;
   return json<Asset>("/api/videos/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(VIDEO_GENERATE_TIMEOUT_MS),
+    signal,
   });
 }
 
@@ -438,15 +450,19 @@ export async function planScenesStream(
   return plan;
 }
 
-export const stitchFilm = (body: {
-  assetIds: string[];
-  fade?: number;
-  clipDuration: number;
-}) =>
+export const stitchFilm = (
+  body: {
+    assetIds: string[];
+    fade?: number;
+    clipDuration: number;
+  },
+  opts?: { signal?: AbortSignal }
+) =>
   json<Asset>("/api/stitch", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal: opts?.signal,
   });
 
 export const fetchJobs = () =>

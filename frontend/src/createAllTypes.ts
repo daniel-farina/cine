@@ -40,6 +40,18 @@ export function computeOverall(
   return total ? done / total : 0;
 }
 
+export function initPlanProgress(label = "Planning scenes…"): CreateAllProgress {
+  return {
+    active: true,
+    phase: "plan",
+    sceneIndex: 0,
+    currentStep: null,
+    label,
+    overall: 0.02,
+    byScene: {},
+  };
+}
+
 export function initCreateAll(sceneIds: string[], sceneCount: number): CreateAllProgress {
   const byScene: Record<string, SceneStepMap> = {};
   sceneIds.forEach((id, i) => {
