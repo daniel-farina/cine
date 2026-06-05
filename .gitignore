@@ -28,6 +28,7 @@ output/
 *.jpeg
 *.webp
 *.gif
+!docs/screenshots/**
 !frontend/public/**
 
 # Local databases
