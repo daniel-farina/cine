@@ -4,6 +4,16 @@ AI film timeline studio: plan multi-scene films, generate keyframes and clips wi
 
 **License:** [MIT](LICENSE)
 
+## Screenshots
+
+**Projects** — pick a film or open Quick Builder.
+
+![Projects dashboard](docs/screenshots/projects-dashboard.jpg)
+
+**Quick Builder** — queue clips, preview stills and video, inspect API payloads, stitch a reel.
+
+![Quick Builder](docs/screenshots/quick-builder.jpg)
+
 ## What you need
 
 | Requirement | Notes |
@@ -133,6 +143,7 @@ cine/
 ├── frontend/         # Vite + React UI
 ├── media-server/     # Express + xAI + ffmpeg
 ├── planner/          # Scene planning prompts/logic
+├── docs/screenshots/ # README images
 ├── scripts/          # Dev helpers
 ├── output/           # Local runtime data (gitignored)
 ├── ecosystem.config.cjs
