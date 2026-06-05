@@ -368,6 +368,9 @@ impl Db {
                     );
                 }
             }
+            if parsed.narrative_modes.is_null() {
+                parsed.narrative_modes = serde_json::json!([]);
+            }
             return Ok(parsed);
         }
         Ok(default_app_settings())

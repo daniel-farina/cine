@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchAppSettings, saveAppSettings, saveProject } from "./api";
 import { normalizeKeyframeSettings } from "./keyframeSettings";
 import NarrativeModeEditor from "./narrativeModeEditor";
@@ -71,13 +71,21 @@ export default function SettingsPage({
   const [rulesExpanded, setRulesExpanded] = useState(true);
   const [modesExpanded, setModesExpanded] = useState(true);
 
+  /** Only re-load when switching films — not on every scene/generation project patch. */
+  const projectId = project?.id ?? null;
+  const projectRef = useRef(project);
+  projectRef.current = project;
+
   const load = useCallback(async () => {
     const app = studioFromApi(await fetchAppSettings(), config);
     setStudio(app);
-    if (project) {
-      setProjectDraft(projectToSettings(project, config, app));
+    const p = projectRef.current;
+    if (p) {
+      setProjectDraft(projectToSettings(p, config, app));
+    } else {
+      setProjectDraft(null);
     }
-  }, [config, project]);
+  }, [config, projectId]);
 
   useEffect(() => {
     void load().catch((e) => setStatus(String(e)));
@@ -118,27 +126,35 @@ export default function SettingsPage({
     setStatus("");
     try {
       if (scope === "studio") {
-        const { settings } = await saveAppSettings({
+        const payload: AppSettings = {
           ...draft,
-          systemRules: draft.systemRules,
+          systemRules: normalizeSystemRules(draft.systemRules),
+          narrativeModes: normalizeNarrativeModes(draft.narrativeModes),
           bridgeEditPrompt: draft.bridgeEditPrompt?.trim() || undefined,
           motionRules: draft.motionRules?.trim() || undefined,
-        });
-        setStudio(studioFromApi(settings, config));
+        };
+        const { settings } = await saveAppSettings(payload);
+        const nextStudio = studioFromApi(settings, config);
+        setStudio(nextStudio);
         onStudioSaved?.(settings);
-        setStatus("Studio defaults saved.");
+        setStatus(
+          project
+            ? "Studio defaults saved (new projects use these — use “This project” to update the open film)."
+            : "Studio defaults saved."
+        );
       } else if (project) {
         const saved = await saveProject({
           ...project,
           keyframeSettings: draft.keyframeSettings,
-          systemRules: draft.systemRules,
+          systemRules: normalizeSystemRules(draft.systemRules),
           plannerMode: draft.plannerMode,
           narrativeMode: draft.narrativeMode,
           bridgeEditPrompt: draft.bridgeEditPrompt?.trim() || undefined,
           motionRules: draft.motionRules?.trim() || undefined,
         });
+        const nextDraft = projectToSettings(saved.project, config, studio);
+        setProjectDraft(nextDraft);
         onProjectSaved?.(saved.project);
-        setProjectDraft(projectToSettings(saved.project, config, studio));
         setStatus(`Saved settings for “${saved.project.title}”.`);
       }
     } catch (e) {
@@ -191,8 +207,8 @@ export default function SettingsPage({
 
       <p className="hint settings-scope-hint">
         {scope === "studio"
-          ? "New projects inherit these values. Existing projects keep their own settings until you edit them here."
-          : "Overrides studio defaults for the open film only."}
+          ? "Saved to the studio profile for new films. The open timeline does not change until you save under “This project”."
+          : "Saved on this film only — generation and YOLO use these values immediately after Save."}
       </p>
 
       <div className="settings-grid">

@@ -846,11 +846,24 @@ export default function App() {
           project={project}
           onBack={() => setScreen(project ? "project" : "home")}
           onProjectSaved={(p) => {
-            setProject(normalizeProject(p, appSettings));
+            const studio = appSettings ?? {
+              keyframeSettings: p.keyframeSettings!,
+              systemRules: p.systemRules ?? [],
+              plannerMode: p.plannerMode ?? "cinematic",
+              narrativeMode: p.narrativeMode ?? "auto",
+              narrativeModes: [],
+              defaultSceneCount: 12,
+            };
+            setProject(normalizeProject(p, studio));
             void reloadProjects();
           }}
           onStudioSaved={(s) => {
-            setAppSettings(s);
+            const modes = normalizeNarrativeModes(s.narrativeModes);
+            setAppSettings({
+              ...s,
+              narrativeModes: modes,
+              narrativeMode: coerceNarrativeModePreference(s.narrativeMode, modes),
+            });
             setSceneCount(s.defaultSceneCount ?? 12);
           }}
         />
