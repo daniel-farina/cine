@@ -322,47 +322,78 @@ async function imageInputFromAsset(asset) {
   return { url: `data:${mime};base64,${b64}`, type: "image_url" };
 }
 
-/** Downscale large uploads so video generation does not send 2MB+ base64 payloads to xAI. */
-async function imageInputForVideo(asset) {
-  const remote = await resolvePublicUrl(asset);
-  if (remote && !remote.includes("127.0.0.1")) {
-    return { url: remote, type: "image_url" };
-  }
+const VIDEO_STILL_EDIT_PROMPT =
+  "Same image, high quality, preserve exact composition, subjects, and lighting — no changes.";
+
+/** JPEG payload for video (~1280px) — avoids multi‑MB base64 on /videos/generations. */
+async function downscaledKeyframePayload(asset) {
   const srcPath = path.join(OUTPUT, asset.filename);
   const st = await fs.stat(srcPath);
-  if (st.size <= VIDEO_KEYFRAME_MAX_BYTES) {
-    return imageInputFromAsset(asset);
-  }
   const tmpName = `_vid_${crypto.randomUUID()}.jpg`;
   const tmpPath = path.join(OUTPUT, tmpName);
   try {
-    await execFileAsync("sips", [
-      "-Z",
-      "1280",
-      "-s",
-      "format",
-      "jpeg",
-      "-s",
-      "formatOptions",
-      "85",
-      srcPath,
-      "--out",
-      tmpPath,
-    ]);
+    const sipsArgs =
+      st.size > VIDEO_KEYFRAME_MAX_BYTES
+        ? ["-Z", "1280", "-s", "format", "jpeg", "-s", "formatOptions", "85", srcPath, "--out", tmpPath]
+        : ["-s", "format", "jpeg", "-s", "formatOptions", "90", srcPath, "--out", tmpPath];
+    await execFileAsync("sips", sipsArgs);
     const buf = await fs.readFile(tmpPath);
     console.error(
-      "[cine-video] downscaled keyframe for I2V",
+      "[cine-video] prepared keyframe JPEG",
       asset.id,
       `${st.size} → ${buf.length} bytes`
     );
     const b64 = buf.toString("base64");
     return { url: `data:image/jpeg;base64,${b64}`, type: "image_url" };
-  } catch (e) {
-    console.error("[cine-video] sips downscale failed, using original", e.message);
-    return imageInputFromAsset(asset);
   } finally {
     await fs.unlink(tmpPath).catch(() => {});
   }
+}
+
+/**
+ * Video API accepts HTTPS image URLs reliably; local uploads only have /files URLs.
+ * Publish a downscaled still via /images/edits to obtain an xAI CDN URL first.
+ */
+async function videoImageInputFromAsset(asset) {
+  const direct =
+    asset.remoteUrl && !asset.remoteUrl.includes("127.0.0.1") ? asset.remoteUrl : null;
+  const pub = await resolvePublicUrl(asset);
+  const remote = direct || (pub && !pub.includes("127.0.0.1") ? pub : null);
+  if (remote) {
+    console.error("[cine-video] using remote keyframe URL", asset.id);
+    return { url: remote, type: "image_url" };
+  }
+
+  const image = await downscaledKeyframePayload(asset);
+  const CDN_PUBLISH_MS = 90_000;
+  try {
+    console.error("[cine-video] publishing keyframe to xAI CDN", asset.id);
+    const data = await Promise.race([
+      apiPost("/images/edits", {
+        model: "grok-imagine-image",
+        prompt: VIDEO_STILL_EDIT_PROMPT,
+        image,
+        aspect_ratio: "16:9",
+        resolution: "1k",
+        response_format: "url",
+      }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("CDN publish timeout")), CDN_PUBLISH_MS)
+      ),
+    ]);
+    const url = data.data?.[0]?.url;
+    if (url) {
+      console.error("[cine-video] CDN keyframe ready for I2V", asset.id);
+      return { url, type: "image_url" };
+    }
+  } catch (e) {
+    console.error(
+      "[cine-video] CDN publish skipped, using inline JPEG",
+      asset.id,
+      e.message || e
+    );
+  }
+  return image;
 }
 
 async function editImageAsset({
@@ -438,7 +469,7 @@ async function generateVideoAsset({ prompt, sourceImageId, duration = 10, aspect
     duration,
     aspect_ratio,
     resolution: normalizeVideoResolution(resolution),
-    image: await imageInputForVideo(img),
+    image: await videoImageInputFromAsset(img),
   };
 
   const start = await apiPost("/videos/generations", body);
