@@ -15,10 +15,13 @@ const API = process.env.CINE_API_URL || "http://127.0.0.1:8792";
 /** jobId -> ChildProcess */
 const running = new Map();
 
+const FETCH_TIMEOUT_MS = 120_000;
+
 async function api(pathname, init = {}) {
   const res = await fetch(`${API}${pathname}`, {
     ...init,
     headers: { "Content-Type": "application/json", ...(init.headers || {}) },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   const text = await res.text();
   let data = {};

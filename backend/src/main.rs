@@ -59,6 +59,10 @@ async fn main() -> anyhow::Result<()> {
     dotenvy::from_path(root.join(".env")).ok();
 
     let db = Arc::new(init_db(&root)?);
+    let requeued = db.requeue_stale_running_jobs()?;
+    if requeued > 0 {
+        tracing::info!(requeued, "requeued stale running jobs");
+    }
     let api_key = std::env::var("XAI_API_KEY").ok();
     let media_base = std::env::var("CINE_MEDIA_URL")
         .unwrap_or_else(|_| format!("http://127.0.0.1:{MEDIA_PORT}"));

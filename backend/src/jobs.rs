@@ -96,6 +96,16 @@ pub struct JobFinishBody {
 }
 
 impl Db {
+    /// Jobs left `running` after a crash/restart — put back in queue.
+    pub fn requeue_stale_running_jobs(&self) -> Result<u32> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let n = self.conn()?.execute(
+            "UPDATE jobs SET status = 'queued', started_at = NULL, label = 'Resuming after restart…', updated_at = ?1 WHERE status = 'running'",
+            [&now],
+        )?;
+        Ok(n as u32)
+    }
+
     pub fn ensure_jobs_schema(&self) -> Result<()> {
         self.conn()?.execute_batch(
             r"
