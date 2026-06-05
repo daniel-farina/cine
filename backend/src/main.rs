@@ -3,7 +3,7 @@ mod db;
 use anyhow::Context;
 use axum::{
     body::Body,
-    extract::{Path, State},
+    extract::{DefaultBodyLimit, Path, State},
     http::{header, HeaderMap, Request, StatusCode},
     response::{IntoResponse, Json, Response},
     routing::{delete, get, post, put},
@@ -26,6 +26,8 @@ use tower_http::{cors::CorsLayer, services::ServeDir, trace::TraceLayer};
 const PORT: u16 = 8792;
 const MEDIA_PORT: u16 = 8793;
 const MAX_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
+/// JSON upload uses base64 (~4/3 overhead); Axum default body limit is 2MB.
+const MAX_UPLOAD_BODY_BYTES: usize = 40 * 1024 * 1024;
 
 #[derive(Clone)]
 struct AppState {
@@ -101,6 +103,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/plan/scenes/stream", post(plan_scenes_stream))
         .fallback(media_proxy)
         .nest_service("/files", ServeDir::new(files_dir))
+        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY_BYTES))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state);

@@ -23,6 +23,21 @@ function parseApiError(raw: unknown): string {
   }
 }
 
+function httpFailureMessage(
+  res: Response,
+  data: Record<string, unknown>,
+  text: string
+): string {
+  const fromBody = parseApiError(data.error);
+  if (fromBody !== "Request failed") return fromBody;
+  if (res.status === 413) {
+    return "Image too large for upload (max 25MB file). Try a smaller JPEG or PNG.";
+  }
+  if (text.trim() && !text.trim().startsWith("{")) return text.trim().slice(0, 240);
+  if (res.status) return `Request failed (${res.status} ${res.statusText})`.trim();
+  return "Request failed";
+}
+
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
   const text = await res.text();
@@ -31,10 +46,11 @@ async function json<T>(url: string, init?: RequestInit): Promise<T> {
     try {
       data = JSON.parse(text) as Record<string, unknown>;
     } catch {
+      if (!res.ok) throw new Error(httpFailureMessage(res, data, text));
       throw new Error(`Invalid JSON: ${text.slice(0, 120)}`);
     }
   }
-  if (!res.ok) throw new Error(parseApiError(data.error));
+  if (!res.ok) throw new Error(httpFailureMessage(res, data, text));
   return data as T;
 }
 
@@ -82,10 +98,17 @@ function fileToBase64(file: File): Promise<string> {
   });
 }
 
+const MAX_UPLOAD_FILE_BYTES = 25 * 1024 * 1024;
+
 export const uploadKeyframeImage = async (
   file: File,
   body: { sceneId: string; label?: string }
 ) => {
+  if (file.size > MAX_UPLOAD_FILE_BYTES) {
+    throw new Error(
+      `Image too large (${(file.size / (1024 * 1024)).toFixed(1)}MB). Max 25MB — use a smaller JPEG or PNG.`
+    );
+  }
   const dataBase64 = await fileToBase64(file);
   return json<Asset>("/api/assets/upload", {
     method: "POST",
