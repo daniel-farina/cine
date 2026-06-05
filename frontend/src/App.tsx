@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useInspectorLayout } from "./useInspectorLayout";
 import Timeline from "./Timeline";
 import HomePage from "./HomePage";
 import ProjectPanel from "./ProjectPanel";
@@ -38,6 +39,7 @@ import type { VideoSource } from "./types";
 import SceneInspector from "./SceneInspector";
 import SettingsPage from "./SettingsPage";
 import { effectiveSettings, normalizeProject } from "./effectiveSettings";
+import { NARRATIVE_MODE_OPTIONS, type NarrativeModePreference } from "./narrativeModes";
 import { SCENE_COUNT_OPTIONS } from "./planningModes";
 import type { AppSettings, Asset, Config, Project, ProjectMeta, Scene } from "./types";
 import { ReasoningOrb } from "./ReasoningOrb";
@@ -215,6 +217,7 @@ export default function App() {
     [project, appSettings, config]
   );
   const ks = effective?.keyframeSettings;
+  const inspectorLayout = useInspectorLayout();
 
   const persist = async (next: Project) => {
     setProject(next);
@@ -231,15 +234,26 @@ export default function App() {
     });
   };
 
+  const addScene = () => {
+    if (!project) return;
+    const scene = newScene(project.scenes.length + 1);
+    void persist({
+      ...project,
+      scenes: [...project.scenes, scene],
+      selectedSceneId: scene.id,
+    });
+    setStatus(`Added “${scene.title}”.`);
+  };
+
   const removeScene = (id: string) => {
-    if (!project || project.scenes.length <= 1) {
-      setStatus("Keep at least one scene on the timeline.");
-      return;
-    }
+    if (!project || !project.scenes.length) return;
     const scene = project.scenes.find((s) => s.id === id);
+    const onlyScene = project.scenes.length === 1;
     if (
       !confirm(
-        `Remove “${scene?.title ?? "this scene"}”? Its keyframes stay in the image library.`
+        onlyScene
+          ? `Remove “${scene?.title ?? "this scene"}” and clear the timeline? Keyframes stay in the image library.`
+          : `Remove “${scene?.title ?? "this scene"}”? Its keyframes stay in the image library.`
       )
     ) {
       return;
@@ -247,10 +261,29 @@ export default function App() {
     const scenes = project.scenes.filter((s) => s.id !== id);
     const nextSelected =
       project.selectedSceneId === id
-        ? scenes[Math.min(sceneIndex, scenes.length - 1)]?.id
+        ? scenes.length
+          ? scenes[Math.min(Math.max(sceneIndex, 0), scenes.length - 1)]?.id ?? null
+          : null
         : project.selectedSceneId;
-    void persist({ ...project, scenes, selectedSceneId: nextSelected ?? scenes[0]?.id });
-    setStatus(`Removed “${scene?.title ?? "scene"}”.`);
+    void persist({ ...project, scenes, selectedSceneId: nextSelected });
+    setStatus(
+      scenes.length
+        ? `Removed “${scene?.title ?? "scene"}”.`
+        : "Timeline cleared — add a scene or plan from your brief."
+    );
+  };
+
+  const clearAllScenes = () => {
+    if (!project || !project.scenes.length) return;
+    if (
+      !confirm(
+        `Remove all ${project.scenes.length} scenes from the timeline? Keyframes and videos stay in the library.`
+      )
+    ) {
+      return;
+    }
+    void persist({ ...project, scenes: [], selectedSceneId: null });
+    setStatus("Timeline cleared — add a scene or plan from your brief.");
   };
 
   const runStitchFilm = async () => {
@@ -356,6 +389,7 @@ export default function App() {
         shotCount: count,
         aspectRatio: ks?.aspectRatio,
         mode: effective.plannerMode,
+        narrativeMode: effective.narrativeMode,
         systemRules: effective.systemRules,
         continuation,
       },
@@ -735,6 +769,7 @@ export default function App() {
           shotCount: count,
           aspectRatio: ks?.aspectRatio,
           mode: effective?.plannerMode,
+          narrativeMode: effective?.narrativeMode,
           systemRules: effective?.systemRules,
           continuation,
         },
@@ -862,16 +897,7 @@ export default function App() {
         <button type="button" className="btn" onClick={() => setScreen("settings")}>
           Settings
         </button>
-        <button
-          type="button"
-          className="btn"
-          onClick={() =>
-            void persist({
-              ...project,
-              scenes: [...project.scenes, newScene(project.scenes.length + 1)],
-            })
-          }
-        >
+        <button type="button" className="btn" onClick={() => addScene()}>
           + Scene
         </button>
         {filmUrl && !busy && (
@@ -899,12 +925,16 @@ export default function App() {
         <ThemeToggle />
       </header>
 
-      <div className="workspace">
+      <div
+        className={`workspace${inspectorLayout.collapsed ? " inspector-collapsed" : ""}`}
+        style={{ gridTemplateColumns: inspectorLayout.gridTemplateColumns }}
+      >
         <section className="left">
           <div className="planner">
             <label>Film brief</label>
             <p className="hint planner-brief-hint">
               Saved with this project — edit anytime; used when planning new or additional scenes.
+              Pick a narrative mode below (Auto reads keywords like coral, wildlife, reef).
             </p>
             <textarea
               rows={3}
@@ -941,6 +971,27 @@ export default function App() {
                 >
                   <option value="replace">Replace timeline</option>
                   <option value="append">Add to timeline</option>
+                </select>
+              </label>
+              <label className="planner-field">
+                Narrative
+                <select
+                  value={effective?.narrativeMode ?? "auto"}
+                  onChange={(e) => {
+                    if (!project) return;
+                    void persist({
+                      ...project,
+                      narrativeMode: e.target.value as NarrativeModePreference,
+                    });
+                  }}
+                  disabled={busy}
+                  title="How the planner treats speech and dialogue"
+                >
+                  {NARRATIVE_MODE_OPTIONS.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
                 </select>
               </label>
               <button
@@ -1078,24 +1129,87 @@ export default function App() {
               </div>
             )}
             <div className="timeline-wrap">
-              <p className="hint">
-                {batch?.active
-                  ? "YOLO running — timeline locked"
-                  : "Drag clips to reorder · YOLO = plan + full pipeline"}
-              </p>
-              <Timeline
-                scenes={project.scenes}
-                selectedId={project.selectedSceneId}
-                assets={assets}
-                batch={batch}
-                onSelect={(id) => void persist({ ...project, selectedSceneId: id })}
-                onReorder={(scenes) => void persist({ ...project, scenes })}
-              />
+              <div className="timeline-toolbar">
+                <p className="hint">
+                  {batch?.active
+                    ? "YOLO running — timeline locked"
+                    : clipCount
+                      ? "Drag clips to reorder · YOLO = plan + full pipeline"
+                      : "No scenes yet — add one manually or plan from your film brief"}
+                </p>
+                {clipCount > 0 && !batch?.active && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs"
+                    disabled={busy}
+                    onClick={() => clearAllScenes()}
+                  >
+                    Clear all scenes
+                  </button>
+                )}
+              </div>
+              {clipCount === 0 ? (
+                <div className="timeline-empty">
+                  <p className="timeline-empty-title">Empty timeline</p>
+                  <p className="hint">
+                    Plan scenes from your brief, run YOLO, or add clips one at a time.
+                  </p>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={busy}
+                    onClick={() => addScene()}
+                  >
+                    Add scene to get started
+                  </button>
+                </div>
+              ) : (
+                <Timeline
+                  scenes={project.scenes}
+                  selectedId={project.selectedSceneId}
+                  assets={assets}
+                  batch={batch}
+                  onSelect={(id) => void persist({ ...project, selectedSceneId: id })}
+                  onReorder={(scenes) => void persist({ ...project, scenes })}
+                />
+              )}
             </div>
           </div>
         </section>
 
-        <section className="inspector">
+        {inspectorLayout.collapsed ? (
+          <aside className="inspector-rail">
+            <button
+              type="button"
+              className="inspector-rail-btn"
+              onClick={inspectorLayout.toggleCollapsed}
+              title="Expand scene panel"
+            >
+              Scene
+            </button>
+          </aside>
+        ) : (
+          <>
+            <div
+              className="workspace-splitter"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize scene panel"
+              onMouseDown={inspectorLayout.onResizeStart}
+            />
+            <section className="inspector">
+              <div className="inspector-chrome">
+                <span className="inspector-chrome-title">Scene</span>
+                <button
+                  type="button"
+                  className="btn-icon btn-icon-sm"
+                  title="Collapse scene panel"
+                  aria-label="Collapse scene panel"
+                  onClick={inspectorLayout.toggleCollapsed}
+                >
+                  ▸
+                </button>
+              </div>
           {selected && ks && effective ? (
             <>
               <div className="inspector-head">
@@ -1106,12 +1220,8 @@ export default function App() {
                 <button
                   type="button"
                   className="btn-icon"
-                  disabled={busy || clipCount <= 1}
-                  title={
-                    clipCount <= 1
-                      ? "Cannot remove the only scene"
-                      : "Remove this scene from the timeline"
-                  }
+                  disabled={busy}
+                  title="Remove this scene from the timeline"
                   onClick={() => removeScene(selected.id)}
                 >
                   Remove scene
@@ -1135,10 +1245,27 @@ export default function App() {
                 onReloadAssets={reloadAssets}
               />
             </>
+          ) : clipCount === 0 ? (
+            <div className="inspector-empty">
+              <h2 style={{ margin: "0 0 0.5rem", fontSize: "1.1rem" }}>No scenes</h2>
+              <p className="hint">
+                Write a film brief and click Plan, use YOLO, or add a scene manually.
+              </p>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={busy}
+                onClick={() => addScene()}
+              >
+                Add scene to get started
+              </button>
+            </div>
           ) : (
-            <p className="hint">Select a scene</p>
+            <p className="hint inspector-placeholder">Select a scene on the timeline</p>
           )}
-        </section>
+            </section>
+          </>
+        )}
       </div>
 
       {filmOpen && filmUrl && (

@@ -1,6 +1,12 @@
 /** Second-pass API: write CHARACTER: lines for each planned scene. */
 
-import { applySilentObservationalPlan, isSilentObservationalBrief } from "./briefNarrativeMode.js";
+import {
+  applyNatureWildlifePlan,
+  applySilentObservationalPlan,
+  NARRATIVE_NATURE,
+  NARRATIVE_SILENT,
+  resolveNarrativeMode,
+} from "./briefNarrativeMode.js";
 import { alignScenePlan } from "./sceneAlign.js";
 import {
   applyDialogueFallbacks,
@@ -139,8 +145,12 @@ export async function enrichScenePlanDialogue({ apiBase, apiKey, brief, plan }) 
 }
 
 export async function finalizeScenePlan(plan, ctx) {
-  const { apiBase, apiKey, brief } = ctx;
-  if (isSilentObservationalBrief(brief)) {
+  const { apiBase, apiKey, brief, narrativeMode: narrativeModeIn } = ctx;
+  const narrativeMode = narrativeModeIn || resolveNarrativeMode(brief);
+  if (narrativeMode === NARRATIVE_NATURE) {
+    return applyNatureWildlifePlan(plan);
+  }
+  if (narrativeMode === NARRATIVE_SILENT) {
     return applySilentObservationalPlan(plan);
   }
   let next = plan;
@@ -156,7 +166,7 @@ export async function finalizeScenePlan(plan, ctx) {
   }
   if (apiKey) {
     try {
-      next = await alignScenePlan({ apiBase, apiKey, brief, plan: next });
+      next = await alignScenePlan({ apiBase, apiKey, brief, plan: next, narrativeMode });
     } catch (e) {
       console.warn("[sceneAlign] failed:", e.message);
     }

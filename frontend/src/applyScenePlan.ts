@@ -4,7 +4,8 @@ import {
   REFERENCE_STILL_PROMPT,
 } from "./prompts";
 import {
-  isSilentObservationalBrief,
+  isNonDialogueBrief,
+  isNatureWildlifeBrief,
   stripEmbeddedSpeechFromAction,
 } from "./briefNarrativeMode";
 import { mergeVideoPerformancePrompt } from "./videoPerformance";
@@ -102,13 +103,17 @@ function sceneFromShot(
   lookBible: string,
   brief: string
 ): Scene {
-  const silentStory = isSilentObservationalBrief(brief);
-  const transition = silentStory || shot.shotKind === "transition";
+  const nonDialogue = isNonDialogueBrief(brief);
+  const natureStory = isNatureWildlifeBrief(brief);
+  const transition = nonDialogue || shot.shotKind === "transition";
   const reference = usesReferenceLayout(globalIndex, appendHadScenes, shotIndex);
   let beat = shot.scenePrompt.trim();
   const dialogue = transition ? "" : (shot.dialogue ?? "").trim();
   let videoPrompt = stripEmbeddedSpeechFromAction((shot.actionPrompt ?? "").trim());
-  if (silentStory && videoPrompt && !/\b(?:mouth|silent|no\s+speech|lip\s+sync)\b/i.test(videoPrompt)) {
+  if (natureStory && videoPrompt && !/\b(?:fish|reef|underwater|no\s+human|lip\s+sync)\b/i.test(videoPrompt)) {
+    videoPrompt =
+      `${videoPrompt}. Natural underwater motion — fish and reef life only; no human speech or lip sync.`.trim();
+  } else if (nonDialogue && !natureStory && videoPrompt && !/\b(?:mouth|silent|no\s+speech|lip\s+sync)\b/i.test(videoPrompt)) {
     videoPrompt =
       `${videoPrompt}. Focal protagonist mouth closed, neutral expression, completely silent, no lip sync.`.trim();
   }
@@ -124,7 +129,7 @@ function sceneFromShot(
     imagePrompt = `${lookBible.trim()} ${beat}`.trim();
   }
 
-  if (!silentStory && !transition && dialogue) {
+  if (!nonDialogue && !transition && dialogue) {
     videoPrompt = mergeVideoPerformancePrompt(videoPrompt, dialogue, "dialogue");
   }
 

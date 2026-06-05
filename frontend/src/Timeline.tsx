@@ -132,25 +132,27 @@ export default function Timeline({
   };
 
   return (
-    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-      <SortableContext items={scenes.map((s) => s.id)} strategy={horizontalListSortingStrategy}>
-        <div className="timeline-track">
-          {scenes.map((s, i) => (
-            <Clip
-              key={s.id}
-              scene={s}
-              index={i}
-              active={s.id === selectedId}
-              assets={assets}
-              nextScene={scenes[i + 1]}
-              batch={batch ?? null}
-              batchCurrent={batchActive && batch?.sceneIndex === i}
-              dragDisabled={batchActive}
-              onSelect={() => onSelect(s.id)}
-            />
-          ))}
-        </div>
-      </SortableContext>
-    </DndContext>
+    <div className="timeline-scroll" role="region" aria-label="Scene timeline">
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+        <SortableContext items={scenes.map((s) => s.id)} strategy={horizontalListSortingStrategy}>
+          <div className="timeline-track">
+            {scenes.map((s, i) => (
+              <Clip
+                key={s.id}
+                scene={s}
+                index={i}
+                active={s.id === selectedId}
+                assets={assets}
+                nextScene={scenes[i + 1]}
+                batch={batch ?? null}
+                batchCurrent={batchActive && batch?.sceneIndex === i}
+                dragDisabled={batchActive}
+                onSelect={() => onSelect(s.id)}
+              />
+            ))}
+          </div>
+        </SortableContext>
+      </DndContext>
+    </div>
   );
 }

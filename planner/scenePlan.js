@@ -1,11 +1,13 @@
 /** Scene planning via xAI Responses API (structured JSON + optional SSE). */
 
 import {
+  applyNatureWildlifePlan,
   applySilentObservationalPlan,
   filterSystemRulesForNarrative,
-  inferBriefNarrativeMode,
-  isSilentObservationalBrief,
+  NARRATIVE_NATURE,
   NARRATIVE_SILENT,
+  NATURE_PLANNER_APPENDIX,
+  resolveNarrativeMode,
   SILENT_PLANNER_APPENDIX,
 } from "./briefNarrativeMode.js";
 import { normalizeDialogueText } from "./dialogueUtil.js";
@@ -117,11 +119,12 @@ const MODE_MAP = {
   multi_agent_deep: { model: "grok-4.20-multi-agent", reasoning: { effort: "high" } },
 };
 
-export function buildPlannerSystemMessage(systemRules, brief = "") {
-  const mode = inferBriefNarrativeMode(brief);
+export function buildPlannerSystemMessage(systemRules, brief = "", narrativeMode = null) {
+  const mode = narrativeMode || resolveNarrativeMode(brief);
   const rules = filterSystemRulesForNarrative(systemRules, mode);
   let msg = PLANNER_SYSTEM;
   if (mode === NARRATIVE_SILENT) msg += SILENT_PLANNER_APPENDIX;
+  if (mode === NARRATIVE_NATURE) msg += NATURE_PLANNER_APPENDIX;
   return msg + formatPlannerRulesBlock(rules);
 }
 
@@ -156,18 +159,29 @@ export function sanitizePlannerBrief(brief) {
     .trim();
 }
 
-export function buildPlannerUserMessage({ brief, shotCount, aspectRatio, continuation }) {
+export function buildPlannerUserMessage({
+  brief,
+  shotCount,
+  aspectRatio,
+  continuation,
+  narrativeMode: narrativeModeIn,
+}) {
   const n = Math.min(24, Math.max(1, Number(shotCount) || 12));
   const append = Boolean(continuation?.append && continuation.existingCount > 0);
   const existingCount = append ? Number(continuation.existingCount) || 0 : 0;
   const cleanBrief = sanitizePlannerBrief(brief);
   if (!cleanBrief) throw new Error("Film brief is empty after removing image placeholders");
-  const silentBrief = isSilentObservationalBrief(cleanBrief);
+  const narrativeMode = narrativeModeIn || resolveNarrativeMode(cleanBrief);
+  const silentBrief = narrativeMode === NARRATIVE_SILENT;
+  const natureBrief = narrativeMode === NARRATIVE_NATURE;
 
   const lines = [
     `Creative brief:\n${cleanBrief}`,
     silentBrief
       ? "NARRATIVE MODE: SILENT / OBSERVATIONAL — the brief is the source of truth. No spoken lines for the protagonist; no invented vendor/buyer dialogue. All shots are movement + atmosphere beats."
+      : null,
+    natureBrief
+      ? "NARRATIVE MODE: NATURE / WILDLIFE DOCUMENTARY — no human dialogue; no invented scientists or divers talking. All shots are marine life, reef, and underwater motion beats."
       : null,
     append
       ? `You MUST return exactly ${n} NEW scenes in shots[] — these continue the existing ${existingCount}-scene timeline. Do not rewrite or repeat earlier beats.`
@@ -205,7 +219,9 @@ export function buildPlannerUserMessage({ brief, shotCount, aspectRatio, continu
   lines.push(
     silentBrief
       ? "ALL shots: shot_kind transition, dialogue empty. action_prompt = city/ambient motion + silent protagonist walking. camera_prompt = lens move only."
-      : "Alternate dialogue and transition shots. transition = empty dialogue + action_prompt (body) + camera_prompt (lens/move). Never put walking/stepping/pan/dolly in scene_prompt — static poses only. Props in dialogue must appear in scene_prompt."
+      : natureBrief
+        ? "ALL shots: shot_kind transition, dialogue empty. action_prompt = fish/coral/water motion only. camera_prompt = lens move only."
+        : "Alternate dialogue and transition shots. transition = empty dialogue + action_prompt (body) + camera_prompt (lens/move). Never put walking/stepping/pan/dolly in scene_prompt — static poses only. Props in dialogue must appear in scene_prompt."
   );
   return lines.filter(Boolean).join("\n\n");
 }
@@ -312,7 +328,9 @@ export function parseScenePlan(raw, options = {}) {
   if (!parsed?.look_bible || !Array.isArray(parsed.shots)) {
     throw new Error("Invalid scene plan shape");
   }
-  const silentPlan = options.narrativeMode === NARRATIVE_SILENT;
+  const silentPlan =
+    options.narrativeMode === NARRATIVE_SILENT ||
+    options.narrativeMode === NARRATIVE_NATURE;
   return {
     lookBible: String(parsed.look_bible).trim(),
     shots: parsed.shots.map((s, i) => {
@@ -343,6 +361,7 @@ export async function planScenes({
   aspectRatio,
   systemRules,
   continuation,
+  narrativeMode: narrativeModePreference,
 }) {
   const cfg = MODE_MAP[mode] || MODE_MAP.cinematic;
   const schema = buildScenePlanSchema(shotCount);
@@ -387,14 +406,20 @@ export async function planScenes({
 
   const text = extractOutputText(data);
   if (!text) throw new Error("No structured plan in response");
-  const narrativeMode = inferBriefNarrativeMode(brief);
+  const narrativeMode = resolveNarrativeMode(brief, narrativeModePreference);
   let plan = parseScenePlan(text, { narrativeMode });
   if (narrativeMode === NARRATIVE_SILENT) plan = applySilentObservationalPlan(plan);
+  if (narrativeMode === NARRATIVE_NATURE) plan = applyNatureWildlifePlan(plan);
   const expected = Math.min(24, Math.max(1, Number(shotCount) || 12));
   if (plan.shots.length !== expected) {
     throw new Error(`Expected ${expected} scenes, got ${plan.shots.length}`);
   }
-  plan = await finalizeScenePlan(plan, { apiBase, apiKey, brief });
+  plan = await finalizeScenePlan(plan, {
+    apiBase,
+    apiKey,
+    brief,
+    narrativeMode,
+  });
   return plan;
 }
 
@@ -422,6 +447,7 @@ export async function planScenesStream({
   aspectRatio,
   systemRules,
   continuation,
+  narrativeMode: narrativeModePreference,
   res,
   send: sendFn,
 }) {
@@ -575,12 +601,13 @@ export async function planScenesStream({
   if (jsonAccum.trim()) {
     try {
       send("phase", { message: "Writing script & aligning with visuals…" });
-      const narrativeMode = inferBriefNarrativeMode(brief);
+      const narrativeMode = resolveNarrativeMode(brief, narrativeModePreference);
       let plan = parseScenePlan(jsonAccum, { narrativeMode });
       if (narrativeMode === NARRATIVE_SILENT) plan = applySilentObservationalPlan(plan);
+      if (narrativeMode === NARRATIVE_NATURE) plan = applyNatureWildlifePlan(plan);
       log.info("plan_parsed", { ...summarizePlan(plan), narrativeMode });
       try {
-        plan = await finalizeScenePlan(plan, { apiBase, apiKey, brief });
+        plan = await finalizeScenePlan(plan, { apiBase, apiKey, brief, narrativeMode });
         log.info("plan_finalized", summarizePlan(plan));
       } catch (e) {
         log.warn("plan_finalize_failed_using_raw", { error: e.message });

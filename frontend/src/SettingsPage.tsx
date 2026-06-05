@@ -2,6 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import { fetchAppSettings, saveAppSettings, saveProject } from "./api";
 import { normalizeKeyframeSettings } from "./keyframeSettings";
 import {
+  DEFAULT_NARRATIVE_MODE,
+  NARRATIVE_MODE_OPTIONS,
+  type NarrativeModePreference,
+} from "./narrativeModes";
+import {
   DEFAULT_SCENE_COUNT,
   PLANNING_MODES,
   SCENE_COUNT_OPTIONS,
@@ -25,6 +30,7 @@ function projectToSettings(p: Project, config: Config, studio: AppSettings): App
     keyframeSettings: normalizeKeyframeSettings(p.keyframeSettings, config),
     systemRules: normalizeSystemRules(p.systemRules),
     plannerMode: p.plannerMode ?? studio.plannerMode,
+    narrativeMode: p.narrativeMode ?? studio.narrativeMode ?? DEFAULT_NARRATIVE_MODE,
     defaultSceneCount: studio.defaultSceneCount,
     bridgeEditPrompt: p.bridgeEditPrompt ?? "",
     motionRules: p.motionRules ?? "",
@@ -36,6 +42,7 @@ function studioFromApi(s: AppSettings, config: Config): AppSettings {
     keyframeSettings: normalizeKeyframeSettings(s.keyframeSettings, config),
     systemRules: normalizeSystemRules(s.systemRules),
     plannerMode: s.plannerMode ?? "cinematic",
+    narrativeMode: s.narrativeMode ?? DEFAULT_NARRATIVE_MODE,
     defaultSceneCount: s.defaultSceneCount ?? DEFAULT_SCENE_COUNT,
     bridgeEditPrompt: s.bridgeEditPrompt ?? "",
     motionRules: s.motionRules ?? "",
@@ -118,6 +125,7 @@ export default function SettingsPage({
           keyframeSettings: draft.keyframeSettings,
           systemRules: draft.systemRules,
           plannerMode: draft.plannerMode,
+          narrativeMode: draft.narrativeMode,
           bridgeEditPrompt: draft.bridgeEditPrompt?.trim() || undefined,
           motionRules: draft.motionRules?.trim() || undefined,
         });
@@ -271,6 +279,24 @@ export default function SettingsPage({
                 }
               >
                 {PLANNING_MODES.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label} — {m.description}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Narrative mode
+              <select
+                value={draft.narrativeMode}
+                onChange={(e) =>
+                  setDraft({
+                    ...draft,
+                    narrativeMode: e.target.value as NarrativeModePreference,
+                  })
+                }
+              >
+                {NARRATIVE_MODE_OPTIONS.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.label} — {m.description}
                   </option>

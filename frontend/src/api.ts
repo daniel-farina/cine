@@ -1,5 +1,6 @@
 import type { AppSettings, Asset, Config, Project, ProjectsIndex } from "./types";
 import type { PlanningMode } from "./planningModes";
+import type { NarrativeModePreference } from "./narrativeModes";
 import {
   formatPlanStreamError,
   planError,
@@ -215,6 +216,7 @@ export const planScenes = (body: {
   aspectRatio?: string;
   systemRules?: string[];
   continuation?: PlanContinuation;
+  narrativeMode?: NarrativeModePreference;
 }) =>
   json<ScenePlan>("/api/plan/scenes", {
     method: "POST",
@@ -238,6 +240,7 @@ export async function planScenesStream(
     aspectRatio?: string;
     systemRules?: string[];
     continuation?: PlanContinuation;
+    narrativeMode?: NarrativeModePreference;
   },
   handlers: PlanStreamHandlers
 ): Promise<ScenePlan | null> {

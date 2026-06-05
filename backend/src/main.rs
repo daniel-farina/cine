@@ -403,6 +403,8 @@ struct PlanBody {
     #[serde(rename = "systemRules")]
     system_rules: Option<Value>,
     continuation: Option<Value>,
+    #[serde(rename = "narrativeMode")]
+    narrative_mode: Option<String>,
 }
 
 async fn plan_scenes(
@@ -432,6 +434,7 @@ async fn plan_scenes(
         "aspectRatio": body.aspect_ratio,
         "systemRules": body.system_rules,
         "continuation": body.continuation,
+        "narrativeMode": body.narrative_mode,
     }))?;
     fs::write(&req_path, &input).await?;
     let child = Command::new("node")
@@ -500,6 +503,7 @@ async fn plan_scenes_stream(
         "aspectRatio": body.aspect_ratio,
         "systemRules": body.system_rules,
         "continuation": body.continuation,
+        "narrativeMode": body.narrative_mode,
     }))?;
     fs::write(&req_path, &input).await?;
 

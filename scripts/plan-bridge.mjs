@@ -56,6 +56,7 @@ try {
     aspectRatio: body.aspectRatio,
     systemRules: body.systemRules,
     continuation: body.continuation,
+    narrativeMode: body.narrativeMode,
   });
   process.stderr.write(`[cine-plan] ok ${JSON.stringify({ shotCount: plan.shots?.length })}\n`);
   process.stdout.write(JSON.stringify(plan));

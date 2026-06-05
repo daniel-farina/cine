@@ -21,6 +21,8 @@ pub struct Project {
     pub system_rules: Option<Value>,
     #[serde(rename = "plannerMode", default)]
     pub planner_mode: Option<String>,
+    #[serde(rename = "narrativeMode", default)]
+    pub narrative_mode: Option<String>,
     #[serde(rename = "bridgeEditPrompt", default)]
     pub bridge_edit_prompt: Option<String>,
     #[serde(rename = "motionRules", default)]
@@ -58,6 +60,8 @@ pub struct AppSettings {
     pub system_rules: Value,
     #[serde(rename = "plannerMode", default = "default_planner_mode")]
     pub planner_mode: String,
+    #[serde(rename = "narrativeMode", default = "default_narrative_mode")]
+    pub narrative_mode: String,
     #[serde(rename = "defaultSceneCount", default = "default_scene_count")]
     pub default_scene_count: u32,
     #[serde(rename = "bridgeEditPrompt", default)]
@@ -68,6 +72,10 @@ pub struct AppSettings {
 
 fn default_planner_mode() -> String {
     "cinematic".to_string()
+}
+
+fn default_narrative_mode() -> String {
+    "auto".to_string()
 }
 
 fn default_scene_count() -> u32 {
@@ -85,6 +93,7 @@ pub fn default_app_settings() -> AppSettings {
         }),
         system_rules: serde_json::json!(default_system_rules()),
         planner_mode: default_planner_mode(),
+        narrative_mode: default_narrative_mode(),
         default_scene_count: default_scene_count(),
         bridge_edit_prompt: None,
         motion_rules: None,
@@ -210,6 +219,10 @@ impl Db {
                 .get("plannerMode")
                 .and_then(|v| v.as_str())
                 .map(String::from),
+            narrative_mode: payload
+                .get("narrativeMode")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             bridge_edit_prompt: payload
                 .get("bridgeEditPrompt")
                 .and_then(|v| v.as_str())
@@ -236,6 +249,7 @@ impl Db {
             "keyframeSettings": project.keyframe_settings,
             "systemRules": project.system_rules,
             "plannerMode": project.planner_mode,
+            "narrativeMode": project.narrative_mode,
             "bridgeEditPrompt": project.bridge_edit_prompt,
             "motionRules": project.motion_rules,
         });
@@ -304,25 +318,17 @@ impl Db {
 
     pub fn blank(title: &str) -> Project {
         let id = Uuid::new_v4().to_string();
-        let scene_id = Uuid::new_v4().to_string();
         Project {
             id: id.clone(),
             title: title.to_string(),
             logline: String::new(),
-            scenes: serde_json::json!([{
-                "id": scene_id,
-                "title": "Scene 1",
-                "imagePrompt": "",
-                "dialogue": "",
-                "videoPrompt": "",
-                "motionPrompt": "Slow subtle dolly in, eye level, 35mm",
-                "status": "empty"
-            }]),
-            selected_scene_id: Some(scene_id),
+            scenes: serde_json::json!([]),
+            selected_scene_id: None,
             look_bible: String::new(),
             keyframe_settings: None,
             system_rules: None,
             planner_mode: None,
+            narrative_mode: None,
             bridge_edit_prompt: None,
             motion_rules: None,
             created_at: None,
@@ -374,6 +380,9 @@ impl Db {
         }
         if project.planner_mode.is_none() {
             project.planner_mode = Some(settings.planner_mode.clone());
+        }
+        if project.narrative_mode.is_none() {
+            project.narrative_mode = Some(settings.narrative_mode.clone());
         }
         project
     }

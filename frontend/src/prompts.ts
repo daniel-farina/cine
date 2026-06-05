@@ -1,4 +1,4 @@
-import { isSilentObservationalBrief } from "./briefNarrativeMode";
+import { isNonDialogueBrief } from "./briefNarrativeMode";
 import { formatSystemRulesBlock } from "./systemRules";
 import type { KeyframeSource, Scene, VideoSource } from "./types";
 import { mergeVideoPerformancePrompt } from "./videoPerformance";
@@ -56,7 +56,7 @@ export function buildSceneVideoGenerationPrompt(
   motionRules?: string,
   ctx?: SceneVideoPromptContext
 ): string {
-  const silent = ctx?.brief ? isSilentObservationalBrief(ctx.brief) : false;
+  const silent = ctx?.brief ? isNonDialogueBrief(ctx.brief) : false;
   const uploadOpening =
     ctx?.sceneIndex === 0 && usesOpeningUpload(scene, ctx.sceneIndex);
 

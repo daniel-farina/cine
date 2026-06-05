@@ -79,22 +79,12 @@ async function ensureOutput() {
 
 function blankProject(title = "Untitled film") {
   const now = new Date().toISOString();
-  const sceneId = crypto.randomUUID();
   return {
     id: crypto.randomUUID(),
     title,
     logline: "",
-    scenes: [
-      {
-        id: sceneId,
-        title: "Scene 1",
-        imagePrompt: "",
-        motionPrompt:
-          "Slow subtle dolly in, eye level, 35mm, gradual transition, same framing as keyframe",
-        status: "empty",
-      },
-    ],
-    selectedSceneId: sceneId,
+    scenes: [],
+    selectedSceneId: null,
     createdAt: now,
     updatedAt: now,
   };
@@ -441,6 +431,7 @@ app.post("/api/plan/scenes", async (req, res) => {
       aspectRatio,
       systemRules,
       continuation,
+      narrativeMode,
     } = req.body;
     const { redactPlanRequest } = await import("../planner/planLog.js");
     console.error("[cine-plan] request", redactPlanRequest(req.body));
@@ -454,6 +445,7 @@ app.post("/api/plan/scenes", async (req, res) => {
       aspectRatio,
       systemRules: Array.isArray(systemRules) ? systemRules : undefined,
       continuation,
+      narrativeMode,
     });
     console.error("[cine-plan] ok", { shotCount: plan.shots?.length });
     res.json(plan);
@@ -473,6 +465,7 @@ app.post("/api/plan/scenes/stream", async (req, res) => {
       aspectRatio,
       systemRules,
       continuation,
+      narrativeMode,
     } = req.body;
     const { redactPlanRequest } = await import("../planner/planLog.js");
     console.error("[cine-plan] stream request", redactPlanRequest(req.body));
@@ -492,6 +485,7 @@ app.post("/api/plan/scenes/stream", async (req, res) => {
       aspectRatio,
       systemRules: Array.isArray(systemRules) ? systemRules : undefined,
       continuation,
+      narrativeMode,
       res,
     });
     res.end();

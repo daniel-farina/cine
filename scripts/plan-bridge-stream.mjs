@@ -84,6 +84,7 @@ try {
     aspectRatio: body.aspectRatio,
     systemRules: body.systemRules,
     continuation: body.continuation,
+    narrativeMode: body.narrativeMode,
     send,
   });
   send("done", {});

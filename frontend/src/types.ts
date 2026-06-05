@@ -61,6 +61,7 @@ export type Project = {
   keyframeSettings?: KeyframeSettings;
   systemRules?: string[];
   plannerMode?: import("./planningModes").PlanningMode;
+  narrativeMode?: import("./narrativeModes").NarrativeModePreference;
   bridgeEditPrompt?: string;
   motionRules?: string;
 };
@@ -101,6 +102,7 @@ export type AppSettings = {
   keyframeSettings: KeyframeSettings;
   systemRules: string[];
   plannerMode: import("./planningModes").PlanningMode;
+  narrativeMode: import("./narrativeModes").NarrativeModePreference;
   defaultSceneCount: number;
   bridgeEditPrompt?: string;
   motionRules?: string;

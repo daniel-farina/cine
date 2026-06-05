@@ -1,6 +1,6 @@
 /** Align still-frame description (scene_prompt) with dialogue for each shot. */
 
-import { isSilentObservationalBrief } from "./briefNarrativeMode.js";
+import { isNonDialogueBrief, resolveNarrativeMode } from "./briefNarrativeMode.js";
 import { normalizeDialogueText } from "./dialogueUtil.js";
 import { isTransitionShot } from "./shotKind.js";
 import { sanitizeStillImagePrompt } from "./staticImagePrompt.js";
@@ -98,8 +98,8 @@ function mergeAlignedPlan(plan, shots) {
   };
 }
 
-export async function alignScenePlan({ apiBase, apiKey, brief, plan }) {
-  if (isSilentObservationalBrief(brief)) return plan;
+export async function alignScenePlan({ apiBase, apiKey, brief, plan, narrativeMode }) {
+  if (isNonDialogueBrief(brief, narrativeMode)) return plan;
   const n = plan.shots.length;
   const res = await fetch(`${apiBase}/responses`, {
     method: "POST",

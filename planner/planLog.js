@@ -1,6 +1,6 @@
 /** Structured planner logs — stderr for PM2 + optional SSE `log` events. */
 
-import { inferBriefNarrativeMode } from "./briefNarrativeMode.js";
+import { resolveNarrativeMode } from "./briefNarrativeMode.js";
 
 export function createPlanLogger(send) {
   const log = (level, msg, data = {}) => {
@@ -31,7 +31,7 @@ export function redactPlanRequest(body) {
     aspectRatio: body.aspectRatio,
     briefLen: brief.length,
     briefPreview: brief.slice(0, 160) + (brief.length > 160 ? "…" : ""),
-    narrativeMode: inferBriefNarrativeMode(brief),
+    narrativeMode: resolveNarrativeMode(brief, body.narrativeMode),
     systemRulesCount: Array.isArray(body.systemRules) ? body.systemRules.length : 0,
     continuation: body.continuation
       ? {
