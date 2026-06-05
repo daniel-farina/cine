@@ -8,11 +8,15 @@ import {
   fetchAssets,
   fetchConfig,
   fetchProjectsIndex,
+  activateProject,
+  fetchProject,
   planScenesStream,
   saveProject,
   stitchFilm,
   type ScenePlan,
 } from "./api";
+import JobQueueBar from "./JobQueueBar";
+import { useJobQueue } from "./JobQueueContext";
 import FilmPreviewHero from "./FilmPreviewHero";
 import FullscreenFilmPlayer from "./FullscreenFilmPlayer";
 import {
@@ -78,6 +82,7 @@ function newScene(n: number): Scene {
 }
 
 export default function App() {
+  const jobQueue = useJobQueue();
   const [config, setConfig] = useState<Config | null>(null);
   const [project, setProject] = useState<Project | null>(null);
   const [projectList, setProjectList] = useState<ProjectMeta[]>([]);
@@ -176,6 +181,7 @@ export default function App() {
     (p: Project) => {
       const normalized = normalizeProject(p, appSettings);
       setProject(normalized);
+      projectRef.current = normalized;
       setActiveProjectId(normalized.id);
       setBrief(normalized.logline || "");
       setScreen("project");
@@ -184,6 +190,72 @@ export default function App() {
     },
     [appSettings, reloadAssets]
   );
+
+  const openProjectById = useCallback(
+    async (id: string) => {
+      await activateProject(id);
+      const p = await fetchProject(id);
+      openProject(p);
+    },
+    [openProject]
+  );
+
+  const serverJob = jobQueue.jobForProject(project?.id ?? null);
+
+  useEffect(() => {
+    const j = serverJob;
+    if (!j) return;
+    if (j.progressDetail && typeof j.progressDetail === "object") {
+      setBatch(j.progressDetail as CreateAllProgress);
+    }
+    if (j.status === "queued" || j.status === "running" || j.status === "waiting_input") {
+      setStatus(j.label);
+    }
+    if (j.status === "waiting_input") {
+      setBatch((prev) =>
+        prev
+          ? { ...prev, active: true, phase: "upload", label: j.label }
+          : {
+              active: true,
+              phase: "upload",
+              sceneIndex: 0,
+              currentStep: null,
+              label: j.label,
+              overall: j.progress,
+              byScene: {},
+            }
+      );
+    }
+    if (j.status === "done") {
+      setBatch((prev) =>
+        prev ? { ...prev, active: false, phase: "idle", overall: 1 } : null
+      );
+      setStatus(j.label || "Job finished.");
+      void reloadAssets();
+      void fetchProject(j.projectId).then((p) => {
+        if (projectRef.current?.id === j.projectId) {
+          setProject(normalizeProject(p, appSettings));
+          projectRef.current = normalizeProject(p, appSettings);
+        }
+      });
+    }
+    if (j.status === "error") {
+      setStatus(j.error || j.label || "Job failed");
+      setBatch((prev) => (prev ? { ...prev, active: false, phase: "idle" } : null));
+    }
+    if (j.status === "cancelled") {
+      setBatch((prev) => (prev ? { ...prev, active: false, phase: "idle" } : null));
+    }
+  }, [
+    serverJob?.id,
+    serverJob?.status,
+    serverJob?.updatedAt,
+    serverJob?.progress,
+    serverJob?.label,
+    serverJob?.error,
+    appSettings,
+    reloadAssets,
+  ]);
 
   const goHome = useCallback(() => {
     setScreen("home");
@@ -488,8 +560,11 @@ export default function App() {
       });
       const list = await reloadAssets();
       assetsRef.current = list;
-      if (yoloWaitingUpload) {
-        setStatus("Opening still uploaded — YOLO will continue automatically…");
+      if (serverJob?.status === "waiting_input") {
+        await jobQueue.resume(serverJob.id);
+        setStatus("Opening still uploaded — generation resuming in background…");
+      } else if (yoloWaitingUpload) {
+        setStatus("Opening still uploaded — job will continue automatically…");
       } else {
         setStatus("Opening still ready — click YOLO to run the full pipeline.");
       }
@@ -543,64 +618,33 @@ export default function App() {
     const mode = resolveYoloOpeningMode(project, yoloOpeningSource);
     if (
       !confirm(
-        `Generate keyframes, videos, and bridges for all ${project.scenes.length} scenes?`
+        `Queue keyframes, videos, and bridges for all ${project.scenes.length} scenes? You can switch projects while it runs.`
       )
     ) {
       return;
     }
 
-    createAllAbortRef.current = false;
-    setBusy(true);
-    assetsRef.current = assets;
-
     try {
-      let p = projectRef.current ?? project;
       if (mode === "upload") {
-        p = projectWithScene1OpeningMode(p, mode);
+        let p = projectWithScene1OpeningMode(project, mode);
         await persistRef(p);
-        p = projectRef.current ?? p;
       }
-      if (mode === "upload") {
-        setBatch({
-          active: true,
-          phase: "upload",
-          sceneIndex: 0,
-          currentStep: null,
-          label: "Choose opening image…",
-          overall: 0,
-          byScene: {},
-        });
-        const up = await ensureYoloOpeningUpload({
-          project: p,
-          assets: assetsRef.current,
-          mode,
-          getProject: () => projectRef.current,
-          persistProject: async (next) => {
-            await persistRef(next);
-          },
-          refreshAssets: reloadAssets,
-          onStatus: setStatus,
-          promptPicker: true,
-          shouldAbort: () => createAllAbortRef.current,
-        });
-        if (!up.ok) return;
-        assetsRef.current = up.assets;
-      }
-      await runYoloGeneratePhase(assetsRef.current);
-      if (!createAllAbortRef.current) {
-        setStatus("Create all finished.");
-      }
-    } catch (e) {
-      setStatus(
-        e instanceof CreateAllCancelled
-          ? "Create all stopped."
-          : String(e instanceof Error ? e.message : e)
+      const job = await jobQueue.enqueue({
+        projectId: project.id,
+        kind: "create_all",
+        label: `Create all · ${project.title}`,
+        payload: { openingMode: mode },
+      });
+      setBatch(
+        (job.progressDetail as CreateAllProgress | undefined) ??
+          initCreateAll(
+            project.scenes.map((s) => s.id),
+            project.scenes.length
+          )
       );
-    } finally {
-      setBatch((prev) => (prev ? { ...prev, active: false, phase: "idle" } : null));
-      setBusy(false);
-      createAllAbortRef.current = false;
-      await reloadAssets();
+      setStatus("Queued — progress in the job bar (runs in background).");
+    } catch (e) {
+      setStatus(String(e instanceof Error ? e.message : e));
     }
   };
 
@@ -614,106 +658,53 @@ export default function App() {
     const mode = resolveYoloOpeningMode(project, yoloOpeningSource);
     const uploadOpening = mode === "upload";
     const needsPlan = yoloNeedsPlan(project, sceneCount);
-    const savedOpening =
-      uploadOpening ? readOpeningUpload(project.scenes) : null;
     const msg = needsPlan
       ? uploadOpening
-        ? `YOLO will plan ${sceneCount} scenes, then ask you to choose your opening image, then generate every keyframe, video, and bridge. Continue?`
-        : `YOLO will plan ${sceneCount} scenes, then auto-generate every keyframe, video, and bridge. This uses a lot of API time. Continue?`
+        ? `Queue YOLO: plan ${sceneCount} scenes, then opening image, then full generate. Continue?`
+        : `Queue YOLO: plan ${sceneCount} scenes, then auto-generate everything. Continue?`
       : uploadOpening
-        ? `YOLO will use your opening image for scene 1, then generate all ${clipCount} clips (keyframes → video → bridge). Continue?`
-        : `YOLO will generate all media for ${clipCount} existing scenes (keyframes → video → bridge). Continue?`;
+        ? `Queue YOLO for ${clipCount} clips (opening image, then generate). Continue?`
+        : `Queue YOLO to generate all ${clipCount} scenes. Continue?`;
     if (!confirm(msg)) return;
 
-    createAllAbortRef.current = false;
-    setBusy(true);
-    setReasoningLog("");
-    assetsRef.current = assets;
-    setBatch({
-      active: true,
-      phase: needsPlan ? "plan" : uploadOpening ? "upload" : "generate",
-      sceneIndex: 0,
-      currentStep: null,
-      label: needsPlan
-        ? `Planning ${sceneCount} scenes…`
-        : uploadOpening
-          ? "Choose opening image…"
-          : "Preparing pipeline…",
-      overall: 0,
-      byScene: {},
-    });
-
     try {
-      if (needsPlan) {
-        setStatus(`YOLO: planning ${sceneCount} scenes…`);
-        await executePlan(sceneCount, "replace");
-        await reloadAssets();
-        if (savedOpening && projectRef.current) {
-          let restored = attachOpeningUploadToScene1(projectRef.current, savedOpening);
-          restored = projectWithScene1OpeningMode(restored, mode);
-          await persistRef(restored);
-          assetsRef.current = await reloadAssets();
-        }
-      }
-
-      let p = projectRef.current;
-      if (!p?.scenes.length) throw new Error("No scenes to generate.");
-
       if (uploadOpening) {
-        p = projectWithScene1OpeningMode(p, mode);
+        const p = projectWithScene1OpeningMode(project, mode);
         await persistRef(p);
-        p = projectRef.current ?? p;
-        const alreadyHasOpening =
-          savedOpening &&
-          p.scenes[0]?.keyframeId === savedOpening.keyframeId;
-        if (!alreadyHasOpening) {
-          setBatch((prev) =>
-            prev
-              ? { ...prev, phase: "upload", label: "Choose opening image for Scene 1…" }
-              : prev
-          );
-        }
-        const up = await ensureYoloOpeningUpload({
-          project: p,
-          assets: assetsRef.current,
-          mode,
-          getProject: () => projectRef.current,
-          persistProject: async (next) => {
-            await persistRef(next);
-          },
-          refreshAssets: reloadAssets,
-          onStatus: setStatus,
-          promptPicker: !alreadyHasOpening,
-          shouldAbort: () => createAllAbortRef.current,
-        });
-        if (!up.ok) return;
-        assetsRef.current = up.assets;
       }
-
-      await runYoloGeneratePhase(assetsRef.current);
-
-      if (!createAllAbortRef.current) {
-        setStatus("YOLO finished — timeline complete.");
-      }
-    } catch (e) {
-      if (!(e instanceof CreateAllCancelled)) {
-        await recoverFromPlanFailure();
-      }
-      setStatus(
-        e instanceof CreateAllCancelled
-          ? "YOLO stopped."
-          : formatPlanStreamError(e)
+      const job = await jobQueue.enqueue({
+        projectId: project.id,
+        kind: "yolo",
+        label: `YOLO · ${project.title}`,
+        payload: {
+          needsPlan,
+          sceneCount,
+          brief: brief.trim(),
+          plannerMode: effective.plannerMode,
+          narrativeMode: effective.narrativeMode,
+          openingMode: mode,
+        },
+      });
+      setBatch(
+        (job.progressDetail as CreateAllProgress | undefined) ??
+          initCreateAll(
+            project.scenes.map((s) => s.id),
+            Math.max(project.scenes.length, sceneCount)
+          )
       );
-    } finally {
-      setBatch((prev) => (prev ? { ...prev, active: false, phase: "idle" } : null));
-      setBusy(false);
-      setReasoningLog("");
-      createAllAbortRef.current = false;
-      await reloadAssets();
+      setStatus("YOLO queued — track it in the job bar; safe to refresh or switch projects.");
+    } catch (e) {
+      setStatus(String(e instanceof Error ? e.message : e));
     }
   };
 
   const stopBatch = () => {
+    const j = serverJob ?? jobQueue.activeJobs[0];
+    if (j) {
+      void jobQueue.cancel(j.id);
+      setStatus("Cancelling job…");
+      return;
+    }
     createAllAbortRef.current = true;
     setStatus("Stopping after current step…");
   };
@@ -829,13 +820,25 @@ export default function App() {
     }
   };
 
+  const queueBar = (
+    <JobQueueBar
+      currentProjectId={project?.id ?? activeProjectId}
+      onOpenProject={(id) => void openProjectById(id)}
+    />
+  );
+
   if (!ready || !config) {
-    return <div className="app" style={{ padding: 24 }}>Loading Cine AI…</div>;
+    return (
+      <div className="app" style={{ padding: 24 }}>
+        Loading Cine AI…
+        {queueBar}
+      </div>
+    );
   }
 
   if (screen === "settings") {
     return (
-      <div className="app home-shell">
+      <div className="app home-shell has-job-queue">
         <header className="topbar topbar-global">
           <AppBrand onClick={() => setScreen(project ? "project" : "home")} />
           <div className="spacer" />
@@ -867,13 +870,14 @@ export default function App() {
             setSceneCount(s.defaultSceneCount ?? 12);
           }}
         />
+        {queueBar}
       </div>
     );
   }
 
   if (screen === "home") {
     return (
-      <div className="app home-shell">
+      <div className="app home-shell has-job-queue">
         <header className="topbar topbar-global">
           <AppBrand />
           <div className="spacer" />
@@ -887,6 +891,7 @@ export default function App() {
           onOpenProject={openProject}
           onOpenSettings={() => setScreen("settings")}
         />
+        {queueBar}
       </div>
     );
   }
@@ -900,7 +905,7 @@ export default function App() {
   }
 
   return (
-    <div className="app">
+    <div className="app has-job-queue">
       <header className="topbar">
         <AppBrand onClick={goHome} />
         <span className="topbar-divider" aria-hidden />
@@ -1308,6 +1313,7 @@ export default function App() {
           onClose={() => setFilmOpen(false)}
         />
       )}
+      {queueBar}
     </div>
   );
 }

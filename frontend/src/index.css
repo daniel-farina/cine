@@ -2150,3 +2150,171 @@ select {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* Global job queue (all pages) */
+.has-job-queue {
+  padding-bottom: 3.5rem;
+}
+
+.has-job-queue .job-queue-bar.expanded {
+  padding-bottom: 0;
+}
+
+.job-queue-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 200;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.25);
+}
+
+.job-queue-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.55rem 1rem;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.88rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.job-queue-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: job-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes job-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.job-queue-chevron {
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.job-queue-panel {
+  max-height: min(42vh, 320px);
+  overflow: auto;
+  padding: 0 1rem 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.job-queue-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+}
+
+.job-queue-settings {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.5rem 0 0.75rem;
+  font-size: 0.85rem;
+}
+
+.job-queue-settings label {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.35rem 0.75rem;
+  align-items: center;
+}
+
+.job-queue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.job-queue-item {
+  padding: 0.65rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.job-queue-item.current {
+  background: rgba(99, 102, 241, 0.06);
+  margin: 0 -0.5rem;
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+  border-radius: 6px;
+}
+
+.job-queue-item-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.job-queue-project-link {
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+}
+
+.job-queue-status {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.job-queue-status.status-running {
+  color: var(--accent);
+}
+
+.job-queue-status.status-waiting_input {
+  color: #f59e0b;
+}
+
+.job-queue-label {
+  margin: 0.25rem 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.job-queue-progress-track {
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.job-queue-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+.job-queue-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+}
+
+.btn-sm {
+  font-size: 0.78rem;
+  padding: 0.25rem 0.55rem;
+}

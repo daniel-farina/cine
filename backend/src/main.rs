@@ -1,4 +1,5 @@
 mod db;
+mod jobs;
 
 use anyhow::Context;
 use axum::{
@@ -11,6 +12,10 @@ use axum::{
 };
 use tokio_util::io::ReaderStream;
 use db::{AppSettings, Db, Project};
+use jobs::{
+    EnqueueJobBody, Job, JobFinishBody, JobProgressBody, QueueSettings, JOB_STATUS_CANCELLED,
+    JOB_STATUS_DONE, JOB_STATUS_ERROR,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
@@ -102,6 +107,18 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/projects/{id}", delete(delete_project))
         .route("/api/plan/scenes", post(plan_scenes))
         .route("/api/plan/scenes/stream", post(plan_scenes_stream))
+        .route("/api/queue", get(get_queue))
+        .route("/api/queue/config", get(get_queue_config))
+        .route("/api/queue/config", put(save_queue_config))
+        .route("/api/jobs", get(list_jobs))
+        .route("/api/jobs", post(enqueue_job))
+        .route("/api/jobs/worker/next", post(claim_job))
+        .route("/api/jobs/{id}", get(get_job))
+        .route("/api/jobs/{id}/cancel", post(cancel_job))
+        .route("/api/jobs/{id}/progress", post(job_progress))
+        .route("/api/jobs/{id}/waiting", post(job_waiting))
+        .route("/api/jobs/{id}/finish", post(job_finish))
+        .route("/api/jobs/{id}/resume", post(resume_job))
         .fallback(media_proxy)
         .nest_service("/files", ServeDir::new(files_dir))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY_BYTES))
@@ -125,9 +142,149 @@ async fn health() -> Json<Value> {
         "ok": true,
         "app": "cine-studio-v2",
         "version": 2,
-        "features": ["projects", "sqlite", "plan_scenes", "rust-core"],
+        "features": ["projects", "sqlite", "plan_scenes", "rust-core", "job_queue"],
         "port": PORT
     }))
+}
+
+async fn get_queue(State(st): State<AppState>) -> Result<Json<Value>, AppError> {
+    Ok(Json(jobs::queue_summary(&st.db)?))
+}
+
+async fn get_queue_config(State(st): State<AppState>) -> Result<Json<QueueSettings>, AppError> {
+    Ok(Json(st.db.queue_settings()?))
+}
+
+async fn save_queue_config(
+    State(st): State<AppState>,
+    Json(settings): Json<QueueSettings>,
+) -> Result<Json<Value>, AppError> {
+    let saved = st.db.save_queue_settings(settings)?;
+    Ok(Json(json!({ "ok": true, "settings": saved })))
+}
+
+async fn list_jobs(State(st): State<AppState>) -> Result<Json<Value>, AppError> {
+    let active = st.db.list_jobs(false)?;
+    let recent_done = st.db.list_jobs(true)?;
+    let done: Vec<&Job> = recent_done
+        .iter()
+        .filter(|j| j.status == JOB_STATUS_DONE || j.status == JOB_STATUS_ERROR || j.status == JOB_STATUS_CANCELLED)
+        .take(50)
+        .collect();
+    Ok(Json(json!({
+        "active": active,
+        "recent": done,
+        "summary": jobs::queue_summary(&st.db)?,
+    })))
+}
+
+async fn get_job(
+    State(st): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Job>, AppError> {
+    let job = st
+        .db
+        .get_job(&id)?
+        .ok_or_else(|| AppError::msg(StatusCode::NOT_FOUND, "Job not found"))?;
+    Ok(Json(job))
+}
+
+async fn enqueue_job(
+    State(st): State<AppState>,
+    Json(body): Json<EnqueueJobBody>,
+) -> Result<Json<Value>, AppError> {
+    let project = st
+        .db
+        .get(&body.project_id)?
+        .ok_or_else(|| AppError::msg(StatusCode::NOT_FOUND, "Project not found"))?;
+    let label = body.label.unwrap_or_else(|| match body.kind.as_str() {
+        "yolo" => format!("YOLO · {}", project.title),
+        "create_all" => format!("Create all · {}", project.title),
+        "plan" => format!("Plan scenes · {}", project.title),
+        _ => format!("{} · {}", body.kind, project.title),
+    });
+    let job = st.db.enqueue_job(
+        &project.id,
+        &project.title,
+        &body.kind,
+        &label,
+        body.payload,
+    )?;
+    tracing::info!(job_id = %job.id, kind = %job.kind, project = %project.id, "job enqueued");
+    Ok(Json(json!({ "ok": true, "job": job })))
+}
+
+async fn claim_job(State(st): State<AppState>) -> Result<Json<Value>, AppError> {
+    let job = st.db.claim_next_job()?;
+    Ok(Json(json!({ "job": job })))
+}
+
+async fn cancel_job(
+    State(st): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    let job = st
+        .db
+        .cancel_job(&id)?
+        .ok_or_else(|| AppError::msg(StatusCode::NOT_FOUND, "Job not found"))?;
+    Ok(Json(json!({ "ok": true, "job": job })))
+}
+
+async fn job_progress(
+    State(st): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<JobProgressBody>,
+) -> Result<Json<Value>, AppError> {
+    let job = st
+        .db
+        .update_job_progress(&id, body.progress, body.label.as_deref(), body.progress_detail)?
+        .ok_or_else(|| AppError::msg(StatusCode::NOT_FOUND, "Job not found"))?;
+    Ok(Json(json!({ "ok": true, "job": job })))
+}
+
+async fn job_waiting(
+    State(st): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<JobProgressBody>,
+) -> Result<Json<Value>, AppError> {
+    let label = body.label.as_deref().unwrap_or("Waiting for input…");
+    let job = st
+        .db
+        .set_job_waiting(&id, label)?
+        .ok_or_else(|| AppError::msg(StatusCode::NOT_FOUND, "Job not found"))?;
+    if let Some(detail) = body.progress_detail {
+        st.db.update_job_progress(&id, body.progress, None, Some(detail))?;
+    }
+    Ok(Json(json!({ "ok": true, "job": job })))
+}
+
+async fn job_finish(
+    State(st): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<JobFinishBody>,
+) -> Result<Json<Value>, AppError> {
+    let job = st
+        .db
+        .finish_job(
+            &id,
+            &body.status,
+            body.error.as_deref(),
+            body.progress,
+            body.progress_detail,
+        )?
+        .ok_or_else(|| AppError::msg(StatusCode::NOT_FOUND, "Job not found"))?;
+    Ok(Json(json!({ "ok": true, "job": job })))
+}
+
+async fn resume_job(
+    State(st): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    let job = st
+        .db
+        .resume_job(&id)?
+        .ok_or_else(|| AppError::msg(StatusCode::BAD_REQUEST, "Job is not waiting for input"))?;
+    Ok(Json(json!({ "ok": true, "job": job })))
 }
 
 async fn get_settings(State(st): State<AppState>) -> Result<Json<Value>, AppError> {

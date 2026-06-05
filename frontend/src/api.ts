@@ -1,4 +1,5 @@
 import type { AppSettings, Asset, Config, Project, ProjectsIndex } from "./types";
+import type { Job, QueueSettings, QueueSummary } from "./jobTypes";
 import type { PlanningMode } from "./planningModes";
 import type { NarrativeModeDefinition } from "./narrativeModes";
 import {
@@ -447,3 +448,33 @@ export const stitchFilm = (body: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+
+export const fetchJobs = () =>
+  json<{ active: Job[]; recent: Job[]; summary: QueueSummary }>("/api/jobs");
+
+export const fetchQueueConfig = () => json<QueueSettings>("/api/queue/config");
+
+export const saveQueueConfig = (settings: QueueSettings) =>
+  json<{ ok: boolean; settings: QueueSettings }>("/api/queue/config", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  });
+
+export const enqueueJob = (body: {
+  projectId: string;
+  kind: string;
+  payload?: Record<string, unknown>;
+  label?: string;
+}) =>
+  json<{ ok: boolean; job: Job }>("/api/jobs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+export const cancelJob = (jobId: string) =>
+  json<{ ok: boolean; job: Job }>(`/api/jobs/${jobId}/cancel`, { method: "POST" });
+
+export const resumeJob = (jobId: string) =>
+  json<{ ok: boolean; job: Job }>(`/api/jobs/${jobId}/resume`, { method: "POST" });

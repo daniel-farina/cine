@@ -136,7 +136,7 @@ impl Db {
         Ok(Self(Mutex::new(conn)))
     }
 
-    fn conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
+    pub(crate) fn conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
         Ok(self.0.lock().map_err(|e| anyhow::anyhow!("db lock: {e}"))?)
     }
 
@@ -416,5 +416,7 @@ impl Db {
 }
 
 pub fn init_db(root: &Path) -> Result<Db> {
-    Db::open(&root.join("output").join("cine.db"))
+    let db = Db::open(&root.join("output").join("cine.db"))?;
+    db.ensure_jobs_schema()?;
+    Ok(db)
 }

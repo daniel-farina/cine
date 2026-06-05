@@ -40,5 +40,12 @@ module.exports = {
       args: "run dev",
       env: { ...sharedEnv, FORCE_COLOR: "1" },
     },
+    {
+      name: "cine-v2-jobs",
+      cwd: root,
+      script: "media-server/jobWorker.js",
+      interpreter: "node",
+      env: { ...sharedEnv, CINE_API_URL: "http://127.0.0.1:8792" },
+    },
   ],
 };
