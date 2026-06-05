@@ -187,14 +187,24 @@ function apiErrorMessage(data, fallback) {
 }
 
 async function apiPost(pathname, body) {
-  const res = await fetch(`${API_BASE}${pathname}`, {
-    method: "POST",
-    headers: apiHeaders(),
-    body: JSON.stringify(body),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(apiErrorMessage(data, res.statusText));
-  return data;
+  try {
+    const res = await fetch(`${API_BASE}${pathname}`, {
+      method: "POST",
+      headers: apiHeaders(),
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(apiErrorMessage(data, res.statusText));
+    return data;
+  } catch (e) {
+    const msg = String(e?.message || e);
+    if (/command failed.*curl/i.test(msg) || /timed out/i.test(msg)) {
+      throw new Error(
+        "xAI request timed out or failed — wait a minute and retry, or use a smaller opening image."
+      );
+    }
+    throw e;
+  }
 }
 
 async function apiGet(pathname) {
@@ -298,6 +308,9 @@ async function generateImageAsset({
   });
 }
 
+/** Max still size before we downscale for video API (xAI data URLs + latency). */
+const VIDEO_KEYFRAME_MAX_BYTES = 900 * 1024;
+
 async function imageInputFromAsset(asset) {
   const remote = await resolvePublicUrl(asset);
   if (remote && !remote.includes("127.0.0.1")) {
@@ -307,6 +320,49 @@ async function imageInputFromAsset(asset) {
   const b64 = buf.toString("base64");
   const mime = asset.filename.endsWith(".png") ? "image/png" : "image/jpeg";
   return { url: `data:${mime};base64,${b64}`, type: "image_url" };
+}
+
+/** Downscale large uploads so video generation does not send 2MB+ base64 payloads to xAI. */
+async function imageInputForVideo(asset) {
+  const remote = await resolvePublicUrl(asset);
+  if (remote && !remote.includes("127.0.0.1")) {
+    return { url: remote, type: "image_url" };
+  }
+  const srcPath = path.join(OUTPUT, asset.filename);
+  const st = await fs.stat(srcPath);
+  if (st.size <= VIDEO_KEYFRAME_MAX_BYTES) {
+    return imageInputFromAsset(asset);
+  }
+  const tmpName = `_vid_${crypto.randomUUID()}.jpg`;
+  const tmpPath = path.join(OUTPUT, tmpName);
+  try {
+    await execFileAsync("sips", [
+      "-Z",
+      "1280",
+      "-s",
+      "format",
+      "jpeg",
+      "-s",
+      "formatOptions",
+      "85",
+      srcPath,
+      "--out",
+      tmpPath,
+    ]);
+    const buf = await fs.readFile(tmpPath);
+    console.error(
+      "[cine-video] downscaled keyframe for I2V",
+      asset.id,
+      `${st.size} → ${buf.length} bytes`
+    );
+    const b64 = buf.toString("base64");
+    return { url: `data:image/jpeg;base64,${b64}`, type: "image_url" };
+  } catch (e) {
+    console.error("[cine-video] sips downscale failed, using original", e.message);
+    return imageInputFromAsset(asset);
+  } finally {
+    await fs.unlink(tmpPath).catch(() => {});
+  }
 }
 
 async function editImageAsset({
@@ -382,7 +438,7 @@ async function generateVideoAsset({ prompt, sourceImageId, duration = 10, aspect
     duration,
     aspect_ratio,
     resolution: normalizeVideoResolution(resolution),
-    image: await imageInputFromAsset(img),
+    image: await imageInputForVideo(img),
   };
 
   const start = await apiPost("/videos/generations", body);
@@ -788,7 +844,10 @@ app.post("/api/videos/generate", async (req, res) => {
     });
     res.json(asset);
   } catch (e) {
-    res.status(500).json({ error: String(e.message) });
+    console.error("[cine-video] generate failed", e.message || e);
+    const msg = String(e.message || e);
+    const code = /not found|required/i.test(msg) ? 400 : 500;
+    res.status(code).json({ error: msg });
   }
 });
 

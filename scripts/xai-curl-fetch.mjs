@@ -6,10 +6,12 @@ const execFileAsync = promisify(execFile);
 const XAI_RESOLVE = "api.x.ai:443:104.18.19.80";
 /** macOS ARG_MAX ~256KB; base64 image JSON must not go on the curl argv. */
 const STDIN_BODY_THRESHOLD = 128 * 1024;
+/** Video start + poll can be slow; avoid curl hanging forever. */
+const CURL_MAX_TIME_SEC = 900;
 
 function buildCurlArgs(url, init = {}, extra = [], { stdinBody = false } = {}) {
   const method = init.method || "GET";
-  const args = ["-sS", "--resolve", XAI_RESOLVE, "-X", method, ...extra];
+  const args = ["-sS", "--max-time", String(CURL_MAX_TIME_SEC), "--resolve", XAI_RESOLVE, "-X", method, ...extra];
   const headers = new Headers(init.headers || {});
   for (const [k, v] of headers) args.push("-H", `${k}: ${v}`);
   if (init.body != null && init.body !== "") {

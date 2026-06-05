@@ -67,7 +67,8 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| reqwest::Client::new());
 
     let media_client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(600))
+        // Video: xAI poll + download often exceeds 10m for 2K still → 10s clip.
+        .timeout(Duration::from_secs(1800))
         .connect_timeout(Duration::from_secs(10))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());

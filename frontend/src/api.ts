@@ -13,6 +13,18 @@ import {
 } from "./planDebug";
 
 function parseApiError(raw: unknown): string {
+  if (raw == null) return "Request failed";
+  if (typeof raw === "object") {
+    const o = raw as { error?: unknown; message?: unknown; cause?: unknown };
+    if (typeof o.error === "string" && o.error.trim()) {
+      if (typeof o.cause === "string" && o.cause.trim()) {
+        return `${o.error} (${o.cause})`;
+      }
+      return o.error;
+    }
+    if (typeof o.message === "string" && o.message.trim()) return o.message;
+    return "Request failed";
+  }
   if (typeof raw !== "string" || !raw.trim()) return "Request failed";
   try {
     const inner = JSON.parse(raw) as { error?: string; cause?: string };
@@ -33,13 +45,28 @@ function httpFailureMessage(
   if (res.status === 413) {
     return "Image too large for upload (max 25MB file). Try a smaller JPEG or PNG.";
   }
+  if (res.status === 500 && typeof data.error === "string" && data.error.trim()) {
+    return data.error;
+  }
+  if (res.status === 502) {
+    const hint = typeof data.error === "string" ? data.error : "";
+    if (/media server|Cannot reach media/i.test(hint)) {
+      return hint;
+    }
+    return "Video service timed out or became unreachable. Refresh the page, then retry Generate video.";
+  }
   if (text.trim() && !text.trim().startsWith("{")) return text.trim().slice(0, 240);
   if (res.status) return `Request failed (${res.status} ${res.statusText})`.trim();
   return "Request failed";
 }
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  let res: Response;
+  try {
+    res = await fetch(url, init);
+  } catch (e) {
+    throw wrapFetchTimeout(e);
+  }
   const text = await res.text();
   let data: Record<string, unknown> = {};
   if (text.trim()) {
@@ -52,6 +79,15 @@ async function json<T>(url: string, init?: RequestInit): Promise<T> {
   }
   if (!res.ok) throw new Error(httpFailureMessage(res, data, text));
   return data as T;
+}
+
+function wrapFetchTimeout(err: unknown): Error {
+  if (err instanceof DOMException && err.name === "TimeoutError") {
+    return new Error(
+      "Video generation timed out after ~29 minutes. Refresh the page and try again, or use a smaller keyframe."
+    );
+  }
+  return err instanceof Error ? err : new Error(String(err));
 }
 
 export const fetchConfig = () => json<Config>("/api/config");
@@ -137,19 +173,23 @@ export const generateImage = (body: {
     body: JSON.stringify(body),
   });
 
-export const generateVideo = (body: {
+const VIDEO_GENERATE_TIMEOUT_MS = 29 * 60 * 1000;
+
+export async function generateVideo(body: {
   prompt: string;
   sourceImageId: string;
   sceneId: string;
   duration?: number;
   aspect_ratio?: string;
   resolution?: string;
-}) =>
-  json<Asset>("/api/videos/generate", {
+}) {
+  return json<Asset>("/api/videos/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(VIDEO_GENERATE_TIMEOUT_MS),
   });
+}
 
 export const extractLastFrame = (body: { videoAssetId: string; sceneId: string }) =>
   json<{ frameAsset: Asset }>("/api/videos/last-frame", {
