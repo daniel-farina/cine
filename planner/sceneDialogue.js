@@ -1,10 +1,8 @@
 /** Second-pass API: write CHARACTER: lines for each planned scene. */
 
 import {
-  applyNatureWildlifePlan,
-  applySilentObservationalPlan,
-  NARRATIVE_NATURE,
-  NARRATIVE_SILENT,
+  applyPlanForMode,
+  isNonDialogueNarrativeMode,
   resolveNarrativeMode,
 } from "./briefNarrativeMode.js";
 import { alignScenePlan } from "./sceneAlign.js";
@@ -14,6 +12,7 @@ import {
   shotsNeedingDialogue,
 } from "./dialogueUtil.js";
 import { isTransitionShot } from "./shotKind.js";
+import { trimDialogueForClip } from "./storyFlow.js";
 
 const MODE = { model: "grok-4.3", reasoning: { effort: "medium" } };
 
@@ -32,7 +31,7 @@ function buildDialogueSchema(count) {
             dialogue: {
               type: "string",
               description:
-                "dialogue shots: 4–8 CHARACTER: lines. transition shots: empty string.",
+                "dialogue shots: 1–2 SHORT CHARACTER: lines. transition shots: empty string.",
             },
           },
           required: ["scene_index", "dialogue"],
@@ -47,11 +46,11 @@ function buildDialogueSchema(count) {
 
 const DIALOGUE_SYSTEM = `You are a screenwriter. Output JSON only.
 Rules:
-- Only write dialogue for shots listed as dialogue — skip transition/movement shots entirely (do not return a line for them).
-- Each dialogue scene needs a FULL mini-scene script: at least 4 lines, usually 4–8 (multiple exchanges, not one line per person).
-- Format: one line per speaker, SHORT_NAME: dialogue (TESLA, ELON, etc.).
-- Lines should feel like a real conversation — questions, reactions, technical detail when the story needs it.
-- Only mention props, vehicle parts, or actions that appear in that scene's visual description (if they discuss a battery, flux unit, door panel, etc., the visual already shows or gestures to it).
+- Each timeline clip is ~10 seconds of video. Dialogue must be lip-syncable in that time.
+- Only write dialogue for shots listed as dialogue — skip transition shots (empty string).
+- Per dialogue shot: 1–2 lines MAX (one short exchange). Under 12 words per line. No monologues.
+- Format: SHORT_NAME: dialogue (TESLA, ELON, etc.).
+- Lines must advance the story_spine and match what is visible in scene_prompt — no random topics.
 - Original dialogue only — no quotes from other films unless the brief requests homage.`;
 
 function extractOutputText(data) {
@@ -69,7 +68,7 @@ function buildDialogueUserMessage({ brief, plan }) {
   const parts = [
     `Film brief:\n${brief.trim()}`,
     `Look bible:\n${plan.lookBible}`,
-    `Write dialogue only for dialogue shots (skip transition). scene_index 0 .. ${plan.shots.length - 1}. Minimum 4 CHARACTER: lines per dialogue scene:`,
+    `Write dialogue only for dialogue shots (skip transition). scene_index 0 .. ${plan.shots.length - 1}. Max 2 short lines per dialogue scene:`,
   ];
   plan.shots.forEach((s, i) => {
     const kind = isTransitionShot(s) ? "transition (no dialogue)" : "dialogue";
@@ -84,14 +83,15 @@ function mergeDialogueLines(plan, lines) {
     const idx = Number(row.scene_index);
     const d = String(row.dialogue || "").trim();
     if (Number.isInteger(idx) && idx >= 0 && idx < plan.shots.length && d) {
-      byIndex.set(idx, normalizeDialogueText(d));
+      byIndex.set(idx, normalizeDialogueText(trimDialogueForClip(d)));
     }
   }
   return {
     ...plan,
     shots: plan.shots.map((s, i) => {
       if (isTransitionShot(s)) return { ...s, dialogue: "" };
-      return { ...s, dialogue: byIndex.get(i) || s.dialogue };
+      const d = byIndex.get(i) || s.dialogue;
+      return { ...s, dialogue: trimDialogueForClip(d) };
     }),
   };
 }
@@ -145,13 +145,10 @@ export async function enrichScenePlanDialogue({ apiBase, apiKey, brief, plan }) 
 }
 
 export async function finalizeScenePlan(plan, ctx) {
-  const { apiBase, apiKey, brief, narrativeMode: narrativeModeIn } = ctx;
-  const narrativeMode = narrativeModeIn || resolveNarrativeMode(brief);
-  if (narrativeMode === NARRATIVE_NATURE) {
-    return applyNatureWildlifePlan(plan);
-  }
-  if (narrativeMode === NARRATIVE_SILENT) {
-    return applySilentObservationalPlan(plan);
+  const { apiBase, apiKey, brief, narrativeMode: narrativeModeIn, narrativeModes } = ctx;
+  const narrativeMode = narrativeModeIn || resolveNarrativeMode(brief, undefined, narrativeModes);
+  if (isNonDialogueNarrativeMode(narrativeMode, narrativeModes)) {
+    return applyPlanForMode(plan, narrativeMode, narrativeModes);
   }
   let next = plan;
   if (apiKey && shotsNeedingDialogue(plan.shots).length) {
@@ -166,7 +163,14 @@ export async function finalizeScenePlan(plan, ctx) {
   }
   if (apiKey) {
     try {
-      next = await alignScenePlan({ apiBase, apiKey, brief, plan: next, narrativeMode });
+      next = await alignScenePlan({
+        apiBase,
+        apiKey,
+        brief,
+        plan: next,
+        narrativeMode,
+        narrativeModes,
+      });
     } catch (e) {
       console.warn("[sceneAlign] failed:", e.message);
     }

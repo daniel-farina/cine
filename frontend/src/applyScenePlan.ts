@@ -110,6 +110,17 @@ function sceneFromShot(
   let beat = shot.scenePrompt.trim();
   const dialogue = transition ? "" : (shot.dialogue ?? "").trim();
   let videoPrompt = stripEmbeddedSpeechFromAction((shot.actionPrompt ?? "").trim());
+  const continuityParts: string[] = [];
+  if (globalIndex > 0 && shot.continuityIn?.trim()) {
+    continuityParts.push(`Continues: ${shot.continuityIn.trim()}`);
+  }
+  if (shot.endState?.trim()) {
+    continuityParts.push(`Ends on: ${shot.endState.trim()}`);
+  }
+  if (continuityParts.length) {
+    const prefix = continuityParts.join(". ");
+    videoPrompt = videoPrompt ? `${prefix}. ${videoPrompt}` : prefix;
+  }
   if (natureStory && videoPrompt && !/\b(?:fish|reef|underwater|no\s+human|lip\s+sync)\b/i.test(videoPrompt)) {
     videoPrompt =
       `${videoPrompt}. Natural underwater motion — fish and reef life only; no human speech or lip sync.`.trim();
@@ -137,6 +148,9 @@ function sceneFromShot(
     id: crypto.randomUUID(),
     title: shot.label || `Scene ${globalIndex + 1}`,
     shotKind: transition ? "transition" : "dialogue",
+    storyBeat: shot.storyBeat,
+    continuityIn: shot.continuityIn,
+    endState: shot.endState,
     imagePrompt,
     visualBeat: reference ? beat : undefined,
     videoPrompt,
@@ -182,6 +196,7 @@ export function projectWithPlan(
   return {
     ...project,
     lookBible: plan.lookBible?.trim() || project.lookBible,
+    storySpine: plan.storySpine?.trim() || project.storySpine,
     logline: brief.trim() || project.logline,
     scenes,
     selectedSceneId: firstNew?.id ?? scenes[0]?.id ?? project.selectedSceneId,

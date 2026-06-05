@@ -31,7 +31,8 @@ export function redactPlanRequest(body) {
     aspectRatio: body.aspectRatio,
     briefLen: brief.length,
     briefPreview: brief.slice(0, 160) + (brief.length > 160 ? "…" : ""),
-    narrativeMode: resolveNarrativeMode(brief, body.narrativeMode),
+    narrativeMode: resolveNarrativeMode(brief, body.narrativeMode, body.narrativeModes),
+    narrativeModeCount: Array.isArray(body.narrativeModes) ? body.narrativeModes.length : 0,
     systemRulesCount: Array.isArray(body.systemRules) ? body.systemRules.length : 0,
     continuation: body.continuation
       ? {

@@ -98,8 +98,15 @@ function mergeAlignedPlan(plan, shots) {
   };
 }
 
-export async function alignScenePlan({ apiBase, apiKey, brief, plan, narrativeMode }) {
-  if (isNonDialogueBrief(brief, narrativeMode)) return plan;
+export async function alignScenePlan({
+  apiBase,
+  apiKey,
+  brief,
+  plan,
+  narrativeMode,
+  narrativeModes,
+}) {
+  if (isNonDialogueBrief(brief, narrativeMode, narrativeModes)) return plan;
   const n = plan.shots.length;
   const res = await fetch(`${apiBase}/responses`, {
     method: "POST",

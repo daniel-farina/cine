@@ -802,6 +802,29 @@ export default function SceneInspector({
             />
           )}
 
+          {(scene.storyBeat?.trim() ||
+            scene.continuityIn?.trim() ||
+            scene.endState?.trim()) && (
+            <div className="story-continuity-block">
+              <p className="hint story-continuity-title">Story beat (from planner)</p>
+              {scene.storyBeat?.trim() && (
+                <p className="hint">
+                  <strong>Beat:</strong> {scene.storyBeat}
+                </p>
+              )}
+              {scene.continuityIn?.trim() && (
+                <p className="hint">
+                  <strong>Continues:</strong> {scene.continuityIn}
+                </p>
+              )}
+              {scene.endState?.trim() && (
+                <p className="hint">
+                  <strong>Ends on:</strong> {scene.endState}
+                </p>
+              )}
+            </div>
+          )}
+
           <label>Video prompt</label>
           <textarea
             rows={3}

@@ -1,6 +1,6 @@
 import type { AppSettings, Asset, Config, Project, ProjectsIndex } from "./types";
 import type { PlanningMode } from "./planningModes";
-import type { NarrativeModePreference } from "./narrativeModes";
+import type { NarrativeModeDefinition } from "./narrativeModes";
 import {
   formatPlanStreamError,
   planError,
@@ -191,6 +191,7 @@ export const saveProject = (p: Project) =>
 
 export type ScenePlan = {
   lookBible: string;
+  storySpine?: string;
   shots: {
     label: string;
     shotKind?: string;
@@ -198,6 +199,9 @@ export type ScenePlan = {
     cameraPrompt: string;
     actionPrompt?: string;
     dialogue?: string;
+    storyBeat?: string;
+    continuityIn?: string;
+    endState?: string;
   }[];
 };
 
@@ -216,7 +220,9 @@ export const planScenes = (body: {
   aspectRatio?: string;
   systemRules?: string[];
   continuation?: PlanContinuation;
-  narrativeMode?: NarrativeModePreference;
+  narrativeMode?: string;
+  narrativeModes?: NarrativeModeDefinition[];
+  clipDurationSeconds?: number;
 }) =>
   json<ScenePlan>("/api/plan/scenes", {
     method: "POST",
@@ -240,7 +246,9 @@ export async function planScenesStream(
     aspectRatio?: string;
     systemRules?: string[];
     continuation?: PlanContinuation;
-    narrativeMode?: NarrativeModePreference;
+    narrativeMode?: string;
+    narrativeModes?: NarrativeModeDefinition[];
+    clipDurationSeconds?: number;
   },
   handlers: PlanStreamHandlers
 ): Promise<ScenePlan | null> {

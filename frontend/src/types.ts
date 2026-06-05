@@ -25,6 +25,9 @@ export type Scene = {
   dialogue?: string;
   motionPrompt: string;
   shotKind?: "dialogue" | "transition";
+  storyBeat?: string;
+  continuityIn?: string;
+  endState?: string;
   /** Per-scene keyframe method (defaults by scene index). */
   keyframeSource?: KeyframeSource;
   videoSource?: VideoSource;
@@ -58,10 +61,11 @@ export type Project = {
   scenes: Scene[];
   selectedSceneId: string | null;
   lookBible?: string;
+  storySpine?: string;
   keyframeSettings?: KeyframeSettings;
   systemRules?: string[];
   plannerMode?: import("./planningModes").PlanningMode;
-  narrativeMode?: import("./narrativeModes").NarrativeModePreference;
+  narrativeMode?: string;
   bridgeEditPrompt?: string;
   motionRules?: string;
 };
@@ -102,7 +106,8 @@ export type AppSettings = {
   keyframeSettings: KeyframeSettings;
   systemRules: string[];
   plannerMode: import("./planningModes").PlanningMode;
-  narrativeMode: import("./narrativeModes").NarrativeModePreference;
+  narrativeMode: string;
+  narrativeModes: import("./narrativeModes").NarrativeModeDefinition[];
   defaultSceneCount: number;
   bridgeEditPrompt?: string;
   motionRules?: string;

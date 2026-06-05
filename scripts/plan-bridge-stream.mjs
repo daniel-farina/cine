@@ -85,6 +85,8 @@ try {
     systemRules: body.systemRules,
     continuation: body.continuation,
     narrativeMode: body.narrativeMode,
+    narrativeModes: body.narrativeModes,
+    clipDurationSeconds: body.clipDurationSeconds,
     send,
   });
   send("done", {});

@@ -11,15 +11,145 @@ const KNOWN_NARRATIVE_MODES = new Set([
   NARRATIVE_NATURE,
 ]);
 
-/** User preference from UI: auto = infer from brief, else force mode. */
-export function resolveNarrativeMode(brief, preference = NARRATIVE_AUTO) {
-  const p = String(preference || NARRATIVE_AUTO).trim();
-  if (p !== NARRATIVE_AUTO && KNOWN_NARRATIVE_MODES.has(p)) return p;
+const NON_DIALOGUE_BEHAVIORS = new Set(["silent", "nature", "non_dialogue"]);
+
+/** Normalize studio narrative mode list from API / settings. */
+export function normalizeNarrativeModeRegistry(modes) {
+  if (!Array.isArray(modes) || !modes.length) return null;
+  const out = [];
+  const seen = new Set();
+  for (const raw of modes) {
+    if (!raw || typeof raw !== "object") continue;
+    const id = String(raw.id || "").trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const behavior = String(raw.behavior || "dialogue").trim();
+    out.push({
+      id,
+      label: String(raw.label || id).trim(),
+      description: String(raw.description || "").trim(),
+      behavior: ["auto", "dialogue", "silent", "nature", "non_dialogue"].includes(behavior)
+        ? behavior
+        : "dialogue",
+      plannerAppendix: raw.plannerAppendix ? String(raw.plannerAppendix) : "",
+      inferKeywords: Array.isArray(raw.inferKeywords)
+        ? raw.inferKeywords.map((k) => String(k).trim()).filter(Boolean)
+        : [],
+    });
+  }
+  return out.length ? out : null;
+}
+
+export function getModeDef(modeId, registry) {
+  if (registry?.length) {
+    return registry.find((m) => m.id === modeId) || null;
+  }
+  return null;
+}
+
+function scoreBriefAgainstMode(text, mode) {
+  const kws = mode.inferKeywords || [];
+  if (!kws.length) return 0;
+  const lower = text.toLowerCase();
+  let score = 0;
+  for (const kw of kws) {
+    const k = String(kw).toLowerCase().trim();
+    if (k && lower.includes(k)) score += 1;
+  }
+  return score;
+}
+
+function inferFromRegistry(brief, registry) {
+  const text = String(brief || "").trim();
+  if (!text || !registry?.length) return inferBriefNarrativeMode(brief);
+
+  let bestId = null;
+  let bestScore = 0;
+  for (const mode of registry) {
+    if (mode.id === NARRATIVE_AUTO || mode.behavior === "auto") continue;
+    const score = scoreBriefAgainstMode(text, mode);
+    if (score > bestScore) {
+      bestScore = score;
+      bestId = mode.id;
+    }
+  }
+  if (bestId && bestScore > 0) return bestId;
   return inferBriefNarrativeMode(brief);
 }
 
-export function isNonDialogueNarrativeMode(mode) {
+/** User preference from UI: auto = infer from brief, else force mode. */
+export function resolveNarrativeMode(brief, preference = NARRATIVE_AUTO, registry = null) {
+  const p = String(preference || NARRATIVE_AUTO).trim();
+  const reg = normalizeNarrativeModeRegistry(registry);
+  if (p !== NARRATIVE_AUTO) {
+    if (reg) {
+      const def = getModeDef(p, reg);
+      if (def && def.behavior !== "auto") return p;
+    } else if (KNOWN_NARRATIVE_MODES.has(p)) {
+      return p;
+    }
+  }
+  return inferFromRegistry(brief, reg);
+}
+
+export function isNonDialogueNarrativeMode(mode, registry = null) {
+  const reg = normalizeNarrativeModeRegistry(registry);
+  const def = getModeDef(mode, reg);
+  if (def) return NON_DIALOGUE_BEHAVIORS.has(def.behavior);
   return mode === NARRATIVE_SILENT || mode === NARRATIVE_NATURE;
+}
+
+export function isSilentStylePlanMode(mode, registry = null) {
+  return isNonDialogueNarrativeMode(mode, registry);
+}
+
+export function plannerAppendixForMode(mode, registry = null) {
+  const reg = normalizeNarrativeModeRegistry(registry);
+  const def = getModeDef(mode, reg);
+  if (def?.plannerAppendix?.trim()) return def.plannerAppendix;
+  if (mode === NARRATIVE_SILENT) return SILENT_PLANNER_APPENDIX;
+  if (mode === NARRATIVE_NATURE) return NATURE_PLANNER_APPENDIX;
+  return "";
+}
+
+export function applyPlanForMode(plan, mode, registry = null) {
+  const reg = normalizeNarrativeModeRegistry(registry);
+  const def = getModeDef(mode, reg);
+  const behavior =
+    def?.behavior ||
+    (mode === NARRATIVE_SILENT
+      ? "silent"
+      : mode === NARRATIVE_NATURE
+        ? "nature"
+        : "dialogue");
+  if (behavior === "silent") return applySilentObservationalPlan(plan);
+  if (behavior === "nature") return applyNatureWildlifePlan(plan);
+  if (behavior === "non_dialogue") return applyGenericNonDialoguePlan(plan);
+  return plan;
+}
+
+export function applyGenericNonDialoguePlan(plan) {
+  return {
+    ...plan,
+    shots: plan.shots.map((s) => {
+      let action = stripEmbeddedSpeechFromAction(s.actionPrompt);
+      if (!action) {
+        action = String(s.scenePrompt || "")
+          .replace(/^same scene,?\s+then\s+/i, "")
+          .trim()
+          .slice(0, 280);
+      }
+      if (!/no\s+(?:human\s+)?speech|mouth\s+closed|silent/i.test(action)) {
+        action = `${action}. No spoken dialogue; mouths closed; ambient motion only.`.trim();
+      }
+      return {
+        ...s,
+        shotKind: "transition",
+        dialogue: "",
+        actionPrompt: action,
+      };
+    }),
+  };
 }
 
 const SILENT_PATTERNS = [
@@ -93,14 +223,17 @@ export function isNatureWildlifeBrief(brief) {
   return inferBriefNarrativeMode(brief) === NARRATIVE_NATURE;
 }
 
-export function isNonDialogueBrief(brief, preference = NARRATIVE_AUTO) {
-  return isNonDialogueNarrativeMode(resolveNarrativeMode(brief, preference));
+export function isNonDialogueBrief(brief, preference = NARRATIVE_AUTO, registry = null) {
+  return isNonDialogueNarrativeMode(
+    resolveNarrativeMode(brief, preference, registry),
+    registry
+  );
 }
 
 /** Drop rules that force dialogue when the brief is silent. */
-export function filterSystemRulesForNarrative(rules, mode) {
+export function filterSystemRulesForNarrative(rules, mode, registry = null) {
   const active = (rules || []).map((r) => String(r).trim()).filter(Boolean);
-  if (mode !== NARRATIVE_SILENT && mode !== NARRATIVE_NATURE) return active;
+  if (!isNonDialogueNarrativeMode(mode, registry)) return active;
   const drop = [
     /alternate\s+dialogue\s+scenes/i,
     /full\s+exchange/i,

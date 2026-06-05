@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchAppSettings, saveAppSettings, saveProject } from "./api";
 import { normalizeKeyframeSettings } from "./keyframeSettings";
+import NarrativeModeEditor from "./narrativeModeEditor";
 import {
+  coerceNarrativeModePreference,
   DEFAULT_NARRATIVE_MODE,
-  NARRATIVE_MODE_OPTIONS,
-  type NarrativeModePreference,
+  narrativeModesForSelect,
+  normalizeNarrativeModes,
 } from "./narrativeModes";
 import {
   DEFAULT_SCENE_COUNT,
@@ -30,7 +32,11 @@ function projectToSettings(p: Project, config: Config, studio: AppSettings): App
     keyframeSettings: normalizeKeyframeSettings(p.keyframeSettings, config),
     systemRules: normalizeSystemRules(p.systemRules),
     plannerMode: p.plannerMode ?? studio.plannerMode,
-    narrativeMode: p.narrativeMode ?? studio.narrativeMode ?? DEFAULT_NARRATIVE_MODE,
+    narrativeMode: coerceNarrativeModePreference(
+      p.narrativeMode ?? studio.narrativeMode,
+      studio.narrativeModes
+    ),
+    narrativeModes: studio.narrativeModes,
     defaultSceneCount: studio.defaultSceneCount,
     bridgeEditPrompt: p.bridgeEditPrompt ?? "",
     motionRules: p.motionRules ?? "",
@@ -42,7 +48,8 @@ function studioFromApi(s: AppSettings, config: Config): AppSettings {
     keyframeSettings: normalizeKeyframeSettings(s.keyframeSettings, config),
     systemRules: normalizeSystemRules(s.systemRules),
     plannerMode: s.plannerMode ?? "cinematic",
-    narrativeMode: s.narrativeMode ?? DEFAULT_NARRATIVE_MODE,
+    narrativeMode: coerceNarrativeModePreference(s.narrativeMode, normalizeNarrativeModes(s.narrativeModes)),
+    narrativeModes: normalizeNarrativeModes(s.narrativeModes),
     defaultSceneCount: s.defaultSceneCount ?? DEFAULT_SCENE_COUNT,
     bridgeEditPrompt: s.bridgeEditPrompt ?? "",
     motionRules: s.motionRules ?? "",
@@ -62,6 +69,7 @@ export default function SettingsPage({
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [rulesExpanded, setRulesExpanded] = useState(true);
+  const [modesExpanded, setModesExpanded] = useState(true);
 
   const load = useCallback(async () => {
     const app = studioFromApi(await fetchAppSettings(), config);
@@ -141,6 +149,9 @@ export default function SettingsPage({
   };
 
   const activeRuleCount = rulesForPrompt(draft.systemRules).length;
+  const modeOptions = narrativeModesForSelect(
+    scope === "project" ? studio.narrativeModes : draft.narrativeModes
+  );
 
   return (
     <div className="settings-page">
@@ -265,6 +276,12 @@ export default function SettingsPage({
               onChange={(e) => patchKs({ videoDuration: Number(e.target.value) })}
             />
           </label>
+          <p className="hint">
+            Story &amp; continuity: each timeline clip is one beat at this length. The planner
+            outputs a story spine, per-scene continuity, and end poses so clips stitch without
+            random jumps. Re-plan existing projects after changing duration or narrative mode —
+            Create all alone will not rewrite old scene prompts.
+          </p>
         </section>
 
         <section className="settings-card">
@@ -292,11 +309,11 @@ export default function SettingsPage({
                 onChange={(e) =>
                   setDraft({
                     ...draft,
-                    narrativeMode: e.target.value as NarrativeModePreference,
+                    narrativeMode: e.target.value,
                   })
                 }
               >
-                {NARRATIVE_MODE_OPTIONS.map((m) => (
+                {modeOptions.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.label} — {m.description}
                   </option>
@@ -321,6 +338,34 @@ export default function SettingsPage({
               </label>
             )}
           </section>
+
+        {scope === "studio" && (
+          <section className="settings-card settings-card-wide">
+            <button
+              type="button"
+              className="settings-rules-toggle"
+              onClick={() => setModesExpanded((e) => !e)}
+              aria-expanded={modesExpanded}
+            >
+              <span>Narrative modes</span>
+              <span className="hint">{draft.narrativeModes.length} modes · planner + YOLO</span>
+              <span>{modesExpanded ? "▾" : "▸"}</span>
+            </button>
+            {modesExpanded && (
+              <NarrativeModeEditor
+                modes={draft.narrativeModes}
+                disabled={busy}
+                onChange={(narrativeModes) => {
+                  const narrativeMode = coerceNarrativeModePreference(
+                    draft.narrativeMode,
+                    narrativeModes
+                  );
+                  setDraft({ ...draft, narrativeModes, narrativeMode });
+                }}
+              />
+            )}
+          </section>
+        )}
 
         <section className="settings-card settings-card-wide">
           <button

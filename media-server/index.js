@@ -432,6 +432,8 @@ app.post("/api/plan/scenes", async (req, res) => {
       systemRules,
       continuation,
       narrativeMode,
+      narrativeModes,
+      clipDurationSeconds,
     } = req.body;
     const { redactPlanRequest } = await import("../planner/planLog.js");
     console.error("[cine-plan] request", redactPlanRequest(req.body));
@@ -446,6 +448,8 @@ app.post("/api/plan/scenes", async (req, res) => {
       systemRules: Array.isArray(systemRules) ? systemRules : undefined,
       continuation,
       narrativeMode,
+      narrativeModes,
+      clipDurationSeconds,
     });
     console.error("[cine-plan] ok", { shotCount: plan.shots?.length });
     res.json(plan);
@@ -466,6 +470,8 @@ app.post("/api/plan/scenes/stream", async (req, res) => {
       systemRules,
       continuation,
       narrativeMode,
+      narrativeModes,
+      clipDurationSeconds,
     } = req.body;
     const { redactPlanRequest } = await import("../planner/planLog.js");
     console.error("[cine-plan] stream request", redactPlanRequest(req.body));
@@ -486,6 +492,8 @@ app.post("/api/plan/scenes/stream", async (req, res) => {
       systemRules: Array.isArray(systemRules) ? systemRules : undefined,
       continuation,
       narrativeMode,
+      narrativeModes,
+      clipDurationSeconds,
       res,
     });
     res.end();

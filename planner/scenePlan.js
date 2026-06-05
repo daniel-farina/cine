@@ -1,18 +1,20 @@
 /** Scene planning via xAI Responses API (structured JSON + optional SSE). */
 
 import {
-  applyNatureWildlifePlan,
-  applySilentObservationalPlan,
+  applyPlanForMode,
   filterSystemRulesForNarrative,
-  NARRATIVE_NATURE,
-  NARRATIVE_SILENT,
-  NATURE_PLANNER_APPENDIX,
+  isSilentStylePlanMode,
+  plannerAppendixForMode,
   resolveNarrativeMode,
-  SILENT_PLANNER_APPENDIX,
 } from "./briefNarrativeMode.js";
 import { normalizeDialogueText } from "./dialogueUtil.js";
 import { finalizeScenePlan } from "./sceneDialogue.js";
 import { normalizeShotKind } from "./shotKind.js";
+import {
+  buildClipDurationPlannerBlock,
+  DEFAULT_CLIP_SECONDS,
+  normalizePlanForClipDuration,
+} from "./storyFlow.js";
 
 const SCENE_ITEM_SCHEMA = {
   type: "object",
@@ -47,7 +49,22 @@ const SCENE_ITEM_SCHEMA = {
     dialogue: {
       type: "string",
       description:
-        "dialogue shots: CHARACTER: lines. transition shots: empty string only.",
+        "dialogue shots: 1–2 SHORT lines only (CHARACTER: under 12 words each). transition shots: empty string only.",
+    },
+    story_beat: {
+      type: "string",
+      enum: ["establish", "continue", "react", "speak", "move", "reveal", "payoff"],
+      description: "Where this clip sits in the story arc",
+    },
+    continuity_in: {
+      type: "string",
+      description:
+        "What carries from the previous clip: positions, props, emotion, location (empty on shot 0)",
+    },
+    end_state: {
+      type: "string",
+      description:
+        "Frozen END pose after this ~10s clip — next shot must bridge from here",
     },
   },
   required: [
@@ -58,6 +75,9 @@ const SCENE_ITEM_SCHEMA = {
     "camera_prompt",
     "sound_prompt",
     "dialogue",
+    "story_beat",
+    "continuity_in",
+    "end_state",
   ],
   additionalProperties: false,
 };
@@ -72,6 +92,11 @@ export function buildScenePlanSchema(sceneCount = 12) {
         description:
           "30–80 word visual lock: medium, palette, grain, lens, era. Repeat verbatim in scene 1 scene_prompt.",
       },
+      story_spine: {
+        type: "string",
+        description:
+          "1–2 sentences: setup → complication → turn → resolution. Every shot must serve this arc.",
+      },
       shots: {
         type: "array",
         description: `Exactly ${n} scenes in narrative order for a film timeline`,
@@ -80,14 +105,14 @@ export function buildScenePlanSchema(sceneCount = 12) {
         items: SCENE_ITEM_SCHEMA,
       },
     },
-    required: ["look_bible", "shots"],
+    required: ["look_bible", "story_spine", "shots"],
     additionalProperties: false,
   };
 }
 
 export const SCENE_PLAN_SCHEMA = buildScenePlanSchema(12);
 
-export const PLANNER_SYSTEM = `You are a senior film editor planning a sequential timeline for xAI Grok Imagine (2K keyframes + image-to-video).
+export const PLANNER_SYSTEM = `You are a senior film editor planning a sequential timeline for xAI Grok Imagine (2K keyframes + image-to-video). Each planned scene becomes ONE stitched clip in a short film.
 
 Output JSON only. Rules for consistency and less "AI slop":
 - look_bible: one rigid visual lock (medium, color grade, grain, lens, era). Every scene_prompt MUST begin with the exact look_bible text, then add only shot-specific subject/action/environment.
@@ -102,8 +127,9 @@ Output JSON only. Rules for consistency and less "AI slop":
 - Think one shot ahead: stage props and vehicles for upcoming action (e.g. car facing the exit before someone drives away). Linked scenes stay related — no unrelated drastic changes.
 - Name main characters when they appear; if faces are visible, describe faces; back turned / far away / silhouette — naming faces is optional.
 - shot_kind alternation: use dialogue and transition shots in rhythm so characters are NOT stuck in one pose. Typical pattern: dialogue (talk) → transition (silent move: walk to door, open door, get in vehicle, camera dolly in) → dialogue (talk in new position) → transition → … For 8+ scenes, roughly half should be transition.
-- dialogue shots: 4+ lines, CHARACTER: format. transition shots: dialogue MUST be "" (empty); action_prompt has the move; mouths closed.
-- transition scene_prompt: frozen END pose after the move (staging reference only for shot 2+).`;
+- dialogue shots: 1–2 SHORT lines max, CHARACTER: format. transition shots: dialogue MUST be "" (empty); action_prompt has the move; mouths closed.
+- transition scene_prompt: frozen END pose after the move (staging reference only for shot 2+).
+- story_spine + per-shot continuity_in / end_state are mandatory — this is how clips stay coherent when stitched.`;
 
 function formatPlannerRulesBlock(systemRules) {
   const active = (systemRules || []).map((r) => String(r).trim()).filter(Boolean);
@@ -119,12 +145,20 @@ const MODE_MAP = {
   multi_agent_deep: { model: "grok-4.20-multi-agent", reasoning: { effort: "high" } },
 };
 
-export function buildPlannerSystemMessage(systemRules, brief = "", narrativeMode = null) {
-  const mode = narrativeMode || resolveNarrativeMode(brief);
-  const rules = filterSystemRulesForNarrative(systemRules, mode);
-  let msg = PLANNER_SYSTEM;
-  if (mode === NARRATIVE_SILENT) msg += SILENT_PLANNER_APPENDIX;
-  if (mode === NARRATIVE_NATURE) msg += NATURE_PLANNER_APPENDIX;
+export function buildPlannerSystemMessage(
+  systemRules,
+  brief = "",
+  narrativeMode = null,
+  narrativeModes = null,
+  clipDurationSeconds = DEFAULT_CLIP_SECONDS
+) {
+  const registry = narrativeModes;
+  const mode = narrativeMode || resolveNarrativeMode(brief, undefined, registry);
+  const rules = filterSystemRulesForNarrative(systemRules, mode, registry);
+  let msg =
+    PLANNER_SYSTEM +
+    buildClipDurationPlannerBlock(clipDurationSeconds) +
+    plannerAppendixForMode(mode, registry);
   return msg + formatPlannerRulesBlock(rules);
 }
 
@@ -165,23 +199,24 @@ export function buildPlannerUserMessage({
   aspectRatio,
   continuation,
   narrativeMode: narrativeModeIn,
+  narrativeModes,
+  clipDurationSeconds = DEFAULT_CLIP_SECONDS,
 }) {
+  const clipSec = Math.min(15, Math.max(4, Number(clipDurationSeconds) || DEFAULT_CLIP_SECONDS));
   const n = Math.min(24, Math.max(1, Number(shotCount) || 12));
   const append = Boolean(continuation?.append && continuation.existingCount > 0);
   const existingCount = append ? Number(continuation.existingCount) || 0 : 0;
   const cleanBrief = sanitizePlannerBrief(brief);
   if (!cleanBrief) throw new Error("Film brief is empty after removing image placeholders");
-  const narrativeMode = narrativeModeIn || resolveNarrativeMode(cleanBrief);
-  const silentBrief = narrativeMode === NARRATIVE_SILENT;
-  const natureBrief = narrativeMode === NARRATIVE_NATURE;
+  const narrativeMode =
+    narrativeModeIn || resolveNarrativeMode(cleanBrief, undefined, narrativeModes);
+  const nonDialogueBrief = isSilentStylePlanMode(narrativeMode, narrativeModes);
 
   const lines = [
+    `Clip duration: ${clipSec} seconds per scene (image-to-video). Plan motion and dialogue for that length only.`,
     `Creative brief:\n${cleanBrief}`,
-    silentBrief
-      ? "NARRATIVE MODE: SILENT / OBSERVATIONAL — the brief is the source of truth. No spoken lines for the protagonist; no invented vendor/buyer dialogue. All shots are movement + atmosphere beats."
-      : null,
-    natureBrief
-      ? "NARRATIVE MODE: NATURE / WILDLIFE DOCUMENTARY — no human dialogue; no invented scientists or divers talking. All shots are marine life, reef, and underwater motion beats."
+    nonDialogueBrief
+      ? "NARRATIVE MODE: NON-DIALOGUE — honor the selected studio mode. No invented conversations unless the brief explicitly requires speech. Prefer movement, atmosphere, and visual beats."
       : null,
     append
       ? `You MUST return exactly ${n} NEW scenes in shots[] — these continue the existing ${existingCount}-scene timeline. Do not rewrite or repeat earlier beats.`
@@ -217,11 +252,9 @@ export function buildPlannerUserMessage({
       : "Return look_bible plus shots[]. Scene 1 scene_prompt starts with look_bible, then a precise composition map (who is left/center/right, facing whom, depth layers, where vehicles/props sit). Scenes 2+ scene_prompt must start with 'Same scene, then'. camera_prompt is camera-only for every scene."
   );
   lines.push(
-    silentBrief
-      ? "ALL shots: shot_kind transition, dialogue empty. action_prompt = city/ambient motion + silent protagonist walking. camera_prompt = lens move only."
-      : natureBrief
-        ? "ALL shots: shot_kind transition, dialogue empty. action_prompt = fish/coral/water motion only. camera_prompt = lens move only."
-        : "Alternate dialogue and transition shots. transition = empty dialogue + action_prompt (body) + camera_prompt (lens/move). Never put walking/stepping/pan/dolly in scene_prompt — static poses only. Props in dialogue must appear in scene_prompt."
+    nonDialogueBrief
+      ? "ALL shots: shot_kind transition, dialogue empty. action_prompt = environmental/subject motion only. camera_prompt = lens move only."
+      : "Alternate dialogue and transition shots. transition = empty dialogue + action_prompt (body) + camera_prompt (lens/move). Never put walking/stepping/pan/dolly in scene_prompt — static poses only. Props in dialogue must appear in scene_prompt."
   );
   return lines.filter(Boolean).join("\n\n");
 }
@@ -328,11 +361,13 @@ export function parseScenePlan(raw, options = {}) {
   if (!parsed?.look_bible || !Array.isArray(parsed.shots)) {
     throw new Error("Invalid scene plan shape");
   }
-  const silentPlan =
-    options.narrativeMode === NARRATIVE_SILENT ||
-    options.narrativeMode === NARRATIVE_NATURE;
+  const silentPlan = isSilentStylePlanMode(
+    options.narrativeMode,
+    options.narrativeModes
+  );
   return {
     lookBible: String(parsed.look_bible).trim(),
+    storySpine: String(parsed.story_spine || "").trim(),
     shots: parsed.shots.map((s, i) => {
       const shotKind = silentPlan ? "transition" : normalizeShotKind(s.shot_kind);
       const dialogue =
@@ -347,9 +382,16 @@ export function parseScenePlan(raw, options = {}) {
         cameraPrompt: String(s.camera_prompt || "").trim(),
         soundPrompt: String(s.sound_prompt || "").trim(),
         dialogue,
+        storyBeat: String(s.story_beat || "").trim(),
+        continuityIn: String(s.continuity_in || "").trim(),
+        endState: String(s.end_state || "").trim(),
       };
     }),
   };
+}
+
+function finalizeParsedPlan(plan, clipDurationSeconds) {
+  return normalizePlanForClipDuration(plan, clipDurationSeconds);
 }
 
 export async function planScenes({
@@ -362,9 +404,13 @@ export async function planScenes({
   systemRules,
   continuation,
   narrativeMode: narrativeModePreference,
+  narrativeModes,
+  clipDurationSeconds = DEFAULT_CLIP_SECONDS,
 }) {
   const cfg = MODE_MAP[mode] || MODE_MAP.cinematic;
   const schema = buildScenePlanSchema(shotCount);
+  const clipSec = Math.min(15, Math.max(4, Number(clipDurationSeconds) || DEFAULT_CLIP_SECONDS));
+  const resolvedMode = resolveNarrativeMode(brief, narrativeModePreference, narrativeModes);
   const res = await fetch(`${apiBase}/responses`, {
     method: "POST",
     headers: {
@@ -376,10 +422,27 @@ export async function planScenes({
       reasoning: cfg.reasoning,
       store: false,
       input: [
-        { role: "system", content: buildPlannerSystemMessage(systemRules, brief) },
+        {
+          role: "system",
+          content: buildPlannerSystemMessage(
+            systemRules,
+            brief,
+            resolvedMode,
+            narrativeModes,
+            clipSec
+          ),
+        },
         {
           role: "user",
-          content: buildPlannerUserMessage({ brief, shotCount, aspectRatio, continuation }),
+          content: buildPlannerUserMessage({
+            brief,
+            shotCount,
+            aspectRatio,
+            continuation,
+            narrativeMode: resolvedMode,
+            narrativeModes,
+            clipDurationSeconds: clipSec,
+          }),
         },
       ],
       text: {
@@ -406,10 +469,12 @@ export async function planScenes({
 
   const text = extractOutputText(data);
   if (!text) throw new Error("No structured plan in response");
-  const narrativeMode = resolveNarrativeMode(brief, narrativeModePreference);
-  let plan = parseScenePlan(text, { narrativeMode });
-  if (narrativeMode === NARRATIVE_SILENT) plan = applySilentObservationalPlan(plan);
-  if (narrativeMode === NARRATIVE_NATURE) plan = applyNatureWildlifePlan(plan);
+  const narrativeMode = resolvedMode;
+  let plan = finalizeParsedPlan(
+    parseScenePlan(text, { narrativeMode, narrativeModes }),
+    clipSec
+  );
+  plan = applyPlanForMode(plan, narrativeMode, narrativeModes);
   const expected = Math.min(24, Math.max(1, Number(shotCount) || 12));
   if (plan.shots.length !== expected) {
     throw new Error(`Expected ${expected} scenes, got ${plan.shots.length}`);
@@ -419,6 +484,7 @@ export async function planScenes({
     apiKey,
     brief,
     narrativeMode,
+    narrativeModes,
   });
   return plan;
 }
@@ -448,6 +514,8 @@ export async function planScenesStream({
   systemRules,
   continuation,
   narrativeMode: narrativeModePreference,
+  narrativeModes,
+  clipDurationSeconds = DEFAULT_CLIP_SECONDS,
   res,
   send: sendFn,
 }) {
@@ -467,6 +535,8 @@ export async function planScenesStream({
 
   const cfg = MODE_MAP[mode] || MODE_MAP.cinematic;
   const schema = buildScenePlanSchema(shotCount);
+  const resolvedMode = resolveNarrativeMode(brief, narrativeModePreference, narrativeModes);
+  const clipSec = Math.min(15, Math.max(4, Number(clipDurationSeconds) || DEFAULT_CLIP_SECONDS));
   const eventTypesSeen = new Set();
 
   log.info("plan_stream_start", {
@@ -475,6 +545,7 @@ export async function planScenesStream({
     reasoning: cfg.reasoning,
     shotCount,
     aspectRatio,
+    clipDurationSeconds: clipSec,
     continuation: continuation?.append ? continuation.existingCount : 0,
   });
 
@@ -492,10 +563,27 @@ export async function planScenesStream({
       store: false,
       stream: true,
       input: [
-        { role: "system", content: buildPlannerSystemMessage(systemRules, brief) },
+        {
+          role: "system",
+          content: buildPlannerSystemMessage(
+            systemRules,
+            brief,
+            resolvedMode,
+            narrativeModes,
+            clipSec
+          ),
+        },
         {
           role: "user",
-          content: buildPlannerUserMessage({ brief, shotCount, aspectRatio, continuation }),
+          content: buildPlannerUserMessage({
+            brief,
+            shotCount,
+            aspectRatio,
+            continuation,
+            narrativeMode: resolvedMode,
+            narrativeModes,
+            clipDurationSeconds: clipSec,
+          }),
         },
       ],
       text: {
@@ -601,13 +689,21 @@ export async function planScenesStream({
   if (jsonAccum.trim()) {
     try {
       send("phase", { message: "Writing script & aligning with visuals…" });
-      const narrativeMode = resolveNarrativeMode(brief, narrativeModePreference);
-      let plan = parseScenePlan(jsonAccum, { narrativeMode });
-      if (narrativeMode === NARRATIVE_SILENT) plan = applySilentObservationalPlan(plan);
-      if (narrativeMode === NARRATIVE_NATURE) plan = applyNatureWildlifePlan(plan);
+      const narrativeMode = resolvedMode;
+      let plan = finalizeParsedPlan(
+        parseScenePlan(jsonAccum, { narrativeMode, narrativeModes }),
+        clipSec
+      );
+      plan = applyPlanForMode(plan, narrativeMode, narrativeModes);
       log.info("plan_parsed", { ...summarizePlan(plan), narrativeMode });
       try {
-        plan = await finalizeScenePlan(plan, { apiBase, apiKey, brief, narrativeMode });
+        plan = await finalizeScenePlan(plan, {
+          apiBase,
+          apiKey,
+          brief,
+          narrativeMode,
+          narrativeModes,
+        });
         log.info("plan_finalized", summarizePlan(plan));
       } catch (e) {
         log.warn("plan_finalize_failed_using_raw", { error: e.message });

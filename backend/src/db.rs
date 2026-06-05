@@ -15,6 +15,8 @@ pub struct Project {
     pub selected_scene_id: Option<String>,
     #[serde(rename = "lookBible", default)]
     pub look_bible: String,
+    #[serde(rename = "storySpine", default)]
+    pub story_spine: String,
     #[serde(rename = "keyframeSettings", default)]
     pub keyframe_settings: Option<Value>,
     #[serde(rename = "systemRules", default)]
@@ -62,6 +64,8 @@ pub struct AppSettings {
     pub planner_mode: String,
     #[serde(rename = "narrativeMode", default = "default_narrative_mode")]
     pub narrative_mode: String,
+    #[serde(rename = "narrativeModes", default)]
+    pub narrative_modes: Value,
     #[serde(rename = "defaultSceneCount", default = "default_scene_count")]
     pub default_scene_count: u32,
     #[serde(rename = "bridgeEditPrompt", default)]
@@ -94,6 +98,7 @@ pub fn default_app_settings() -> AppSettings {
         system_rules: serde_json::json!(default_system_rules()),
         planner_mode: default_planner_mode(),
         narrative_mode: default_narrative_mode(),
+        narrative_modes: serde_json::json!([]),
         default_scene_count: default_scene_count(),
         bridge_edit_prompt: None,
         motion_rules: None,
@@ -213,6 +218,11 @@ impl Db {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string(),
+            story_spine: payload
+                .get("storySpine")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
             keyframe_settings: payload.get("keyframeSettings").cloned(),
             system_rules: payload.get("systemRules").cloned(),
             planner_mode: payload
@@ -246,6 +256,7 @@ impl Db {
             "scenes": project.scenes,
             "selectedSceneId": project.selected_scene_id,
             "lookBible": project.look_bible,
+            "storySpine": project.story_spine,
             "keyframeSettings": project.keyframe_settings,
             "systemRules": project.system_rules,
             "plannerMode": project.planner_mode,
@@ -325,6 +336,7 @@ impl Db {
             scenes: serde_json::json!([]),
             selected_scene_id: None,
             look_bible: String::new(),
+            story_spine: String::new(),
             keyframe_settings: None,
             system_rules: None,
             planner_mode: None,

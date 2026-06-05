@@ -1,5 +1,10 @@
 import { normalizeKeyframeSettings } from "./keyframeSettings";
-import { DEFAULT_NARRATIVE_MODE, type NarrativeModePreference } from "./narrativeModes";
+import {
+  coerceNarrativeModePreference,
+  DEFAULT_NARRATIVE_MODE,
+  normalizeNarrativeModes,
+  type NarrativeModeDefinition,
+} from "./narrativeModes";
 import { DEFAULT_SCENE_COUNT, type PlanningMode } from "./planningModes";
 import { normalizeSystemRules, rulesForPrompt } from "./systemRules";
 import type { AppSettings, Config, KeyframeSettings, Project } from "./types";
@@ -8,7 +13,8 @@ export type EffectiveSettings = {
   keyframeSettings: KeyframeSettings;
   systemRules: string[];
   plannerMode: PlanningMode;
-  narrativeMode: NarrativeModePreference;
+  narrativeMode: string;
+  narrativeModes: NarrativeModeDefinition[];
   defaultSceneCount: number;
   bridgeEditPrompt?: string;
   motionRules?: string;
@@ -33,8 +39,11 @@ export function effectiveSettings(
     keyframeSettings,
     systemRules: rules,
     plannerMode: project?.plannerMode ?? studio?.plannerMode ?? "cinematic",
-    narrativeMode:
-      project?.narrativeMode ?? studio?.narrativeMode ?? DEFAULT_NARRATIVE_MODE,
+    narrativeModes: normalizeNarrativeModes(studio?.narrativeModes),
+    narrativeMode: coerceNarrativeModePreference(
+      project?.narrativeMode ?? studio?.narrativeMode,
+      normalizeNarrativeModes(studio?.narrativeModes)
+    ),
     defaultSceneCount: studio?.defaultSceneCount ?? DEFAULT_SCENE_COUNT,
     bridgeEditPrompt: project?.bridgeEditPrompt?.trim() || studio?.bridgeEditPrompt?.trim() || undefined,
     motionRules: project?.motionRules?.trim() || studio?.motionRules?.trim() || undefined,

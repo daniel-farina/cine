@@ -9,12 +9,15 @@ function speakerName(label: string): string {
   return t;
 }
 
+const MAX_SPEECH_LINES = 2;
+
 export function dialogueToEmbeddedSpeech(dialogue: string): string {
   const lines = dialogue
     .trim()
     .split("\n")
     .map((l) => l.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .slice(0, MAX_SPEECH_LINES);
   if (!lines.length) return "";
 
   const parts = lines.map((line) => {

@@ -39,7 +39,11 @@ import type { VideoSource } from "./types";
 import SceneInspector from "./SceneInspector";
 import SettingsPage from "./SettingsPage";
 import { effectiveSettings, normalizeProject } from "./effectiveSettings";
-import { NARRATIVE_MODE_OPTIONS, type NarrativeModePreference } from "./narrativeModes";
+import {
+  coerceNarrativeModePreference,
+  narrativeModesForSelect,
+  normalizeNarrativeModes,
+} from "./narrativeModes";
 import { SCENE_COUNT_OPTIONS } from "./planningModes";
 import type { AppSettings, Asset, Config, Project, ProjectMeta, Scene } from "./types";
 import { ReasoningOrb } from "./ReasoningOrb";
@@ -153,7 +157,12 @@ export default function App() {
     setProjectList(idx.projects);
     setActiveProjectId(idx.activeId);
     setAssets(a);
-    setAppSettings(studio);
+    const narrativeModes = normalizeNarrativeModes(studio.narrativeModes);
+    setAppSettings({
+      ...studio,
+      narrativeModes,
+      narrativeMode: coerceNarrativeModePreference(studio.narrativeMode, narrativeModes),
+    });
     setSceneCount(studio.defaultSceneCount ?? 12);
   }, []);
 
@@ -390,6 +399,8 @@ export default function App() {
         aspectRatio: ks?.aspectRatio,
         mode: effective.plannerMode,
         narrativeMode: effective.narrativeMode,
+        narrativeModes: effective.narrativeModes,
+        clipDurationSeconds: ks?.videoDuration ?? config?.defaults.videoDuration,
         systemRules: effective.systemRules,
         continuation,
       },
@@ -770,6 +781,8 @@ export default function App() {
           aspectRatio: ks?.aspectRatio,
           mode: effective?.plannerMode,
           narrativeMode: effective?.narrativeMode,
+          narrativeModes: effective?.narrativeModes,
+          clipDurationSeconds: ks?.videoDuration ?? config?.defaults.videoDuration,
           systemRules: effective?.systemRules,
           continuation,
         },
@@ -935,6 +948,8 @@ export default function App() {
             <p className="hint planner-brief-hint">
               Saved with this project — edit anytime; used when planning new or additional scenes.
               Pick a narrative mode below (Auto reads keywords like coral, wildlife, reef).
+              Each clip is ~{ks?.videoDuration ?? config?.defaults.videoDuration ?? 10}s — re-plan after
+              changing duration so beats match clip length.
             </p>
             <textarea
               rows={3}
@@ -945,6 +960,11 @@ export default function App() {
               }}
               placeholder="Underground racing, Tesla and Elon in a garage with a Cybertruck…"
             />
+            {project.storySpine?.trim() && (
+              <p className="hint planner-story-spine">
+                <strong>Story spine:</strong> {project.storySpine.trim()}
+              </p>
+            )}
             <div className="planner-row">
               <label className="planner-field">
                 Scenes
@@ -981,13 +1001,13 @@ export default function App() {
                     if (!project) return;
                     void persist({
                       ...project,
-                      narrativeMode: e.target.value as NarrativeModePreference,
+                      narrativeMode: e.target.value,
                     });
                   }}
                   disabled={busy}
                   title="How the planner treats speech and dialogue"
                 >
-                  {NARRATIVE_MODE_OPTIONS.map((m) => (
+                  {narrativeModesForSelect(effective?.narrativeModes ?? []).map((m) => (
                     <option key={m.id} value={m.id}>
                       {m.label}
                     </option>

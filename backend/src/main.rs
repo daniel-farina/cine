@@ -405,6 +405,10 @@ struct PlanBody {
     continuation: Option<Value>,
     #[serde(rename = "narrativeMode")]
     narrative_mode: Option<String>,
+    #[serde(rename = "narrativeModes")]
+    narrative_modes: Option<Value>,
+    #[serde(rename = "clipDurationSeconds")]
+    clip_duration_seconds: Option<u32>,
 }
 
 async fn plan_scenes(
@@ -435,6 +439,8 @@ async fn plan_scenes(
         "systemRules": body.system_rules,
         "continuation": body.continuation,
         "narrativeMode": body.narrative_mode,
+        "narrativeModes": body.narrative_modes,
+        "clipDurationSeconds": body.clip_duration_seconds,
     }))?;
     fs::write(&req_path, &input).await?;
     let child = Command::new("node")
@@ -504,6 +510,8 @@ async fn plan_scenes_stream(
         "systemRules": body.system_rules,
         "continuation": body.continuation,
         "narrativeMode": body.narrative_mode,
+        "narrativeModes": body.narrative_modes,
+        "clipDurationSeconds": body.clip_duration_seconds,
     }))?;
     fs::write(&req_path, &input).await?;
 

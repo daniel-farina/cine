@@ -63,6 +63,18 @@ export function buildSceneVideoGenerationPrompt(
   let videoPrompt = scene.videoPrompt?.trim() ?? "";
   if (isUploadLabelPrompt(videoPrompt)) videoPrompt = "";
 
+  const continuity: string[] = [];
+  if ((ctx?.sceneIndex ?? 0) > 0 && scene.continuityIn?.trim()) {
+    continuity.push(`Continues from previous clip: ${scene.continuityIn.trim()}`);
+  }
+  if (scene.endState?.trim()) {
+    continuity.push(`This clip ends on: ${scene.endState.trim()}`);
+  }
+  if (continuity.length) {
+    const block = continuity.join(". ");
+    videoPrompt = videoPrompt ? `${block}. ${videoPrompt}` : block;
+  }
+
   const built = buildVideoPrompt(scene.motionPrompt, {
     videoPrompt,
     dialogue: silent ? "" : scene.dialogue,
@@ -101,7 +113,7 @@ export function buildSceneVideoGenerationPrompt(
 }
 
 const DEFAULT_MOTION_RULES =
-  "Gradual camera transition only; same location and subjects; no drastic change, no hard cut, no new scene.";
+  "Slow continuous motion over ~10 seconds from this keyframe; same location, wardrobe, and characters; no teleporting, no hard cut, no new people entering frame; match end pose for seamless stitch to next clip.";
 
 export function buildKeyframePrompt(
   description: string,

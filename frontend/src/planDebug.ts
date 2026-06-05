@@ -17,11 +17,13 @@ export function redactPlanRequestBody(body: {
   systemRules?: string[];
   continuation?: PlanContinuation;
   narrativeMode?: string;
+  narrativeModes?: unknown[];
 }) {
   const brief = sanitizeFilmBrief(body.brief);
   return {
     mode: body.mode,
     narrativeMode: body.narrativeMode,
+    narrativeModeCount: body.narrativeModes?.length ?? 0,
     shotCount: body.shotCount,
     aspectRatio: body.aspectRatio,
     briefLen: brief.length,

@@ -57,6 +57,8 @@ try {
     systemRules: body.systemRules,
     continuation: body.continuation,
     narrativeMode: body.narrativeMode,
+    narrativeModes: body.narrativeModes,
+    clipDurationSeconds: body.clipDurationSeconds,
   });
   process.stderr.write(`[cine-plan] ok ${JSON.stringify({ shotCount: plan.shots?.length })}\n`);
   process.stdout.write(JSON.stringify(plan));
