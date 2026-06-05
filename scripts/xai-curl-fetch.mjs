@@ -4,22 +4,29 @@ import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
 const XAI_RESOLVE = "api.x.ai:443:104.18.19.80";
+/** macOS ARG_MAX ~256KB; base64 image JSON must not go on the curl argv. */
+const STDIN_BODY_THRESHOLD = 128 * 1024;
 
-function buildCurlArgs(url, init = {}, extra = []) {
+function buildCurlArgs(url, init = {}, extra = [], { stdinBody = false } = {}) {
   const method = init.method || "GET";
   const args = ["-sS", "--resolve", XAI_RESOLVE, "-X", method, ...extra];
   const headers = new Headers(init.headers || {});
   for (const [k, v] of headers) args.push("-H", `${k}: ${v}`);
-  if (init.body) args.push("-d", String(init.body));
+  if (init.body != null && init.body !== "") {
+    if (stdinBody) args.push("-d", "@-");
+    else args.push("-d", String(init.body));
+  }
   args.push(url);
   return args;
 }
 
 async function curlBufferedFetch(url, init = {}) {
-  const args = buildCurlArgs(url, init, ["-w", "\n%{http_code}"]);
-  const { stdout } = await execFileAsync("/usr/bin/curl", args, {
-    maxBuffer: 64 * 1024 * 1024,
-  });
+  const bodyStr = init.body != null ? String(init.body) : "";
+  const stdinBody = bodyStr.length > STDIN_BODY_THRESHOLD;
+  const args = buildCurlArgs(url, init, ["-w", "\n%{http_code}"], { stdinBody });
+  const opts = { maxBuffer: 64 * 1024 * 1024 };
+  if (stdinBody) opts.input = bodyStr;
+  const { stdout } = await execFileAsync("/usr/bin/curl", args, opts);
   const nl = stdout.lastIndexOf("\n");
   const body = nl >= 0 ? stdout.slice(0, nl) : stdout;
   const status = nl >= 0 ? Number(stdout.slice(nl + 1)) : 0;
@@ -33,7 +40,18 @@ async function curlBufferedFetch(url, init = {}) {
 }
 
 function curlStreamFetch(url, init = {}) {
-  const child = spawn("/usr/bin/curl", buildCurlArgs(url, init, ["-N"]));
+  const bodyStr = init.body != null ? String(init.body) : "";
+  const stdinBody = bodyStr.length > STDIN_BODY_THRESHOLD;
+  const args = buildCurlArgs(url, init, ["-N"], { stdinBody });
+  const child = spawn(
+    "/usr/bin/curl",
+    args,
+    stdinBody ? { stdio: ["pipe", "pipe", "pipe"] } : undefined
+  );
+  if (stdinBody) {
+    child.stdin.write(bodyStr);
+    child.stdin.end();
+  }
   return Promise.resolve({
     ok: true,
     status: 200,
